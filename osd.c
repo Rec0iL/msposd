@@ -428,7 +428,7 @@ static void rx_msp_callback(msp_msg_t *msp_message) {
 	stat_msp_ttl++;
 
 	// We will forward ALL MSP traffic, not only DisplayPort
-	if (fb_cursor > sizeof(frame_buffer)) {
+	if (fb_cursor >= sizeof(frame_buffer)) {
 		if (out_sock > 0) {
 			printf("Exhausted frame buffer! Flushing...\n");
 			sendto(
@@ -530,7 +530,7 @@ static void rx_msp_callback(msp_msg_t *msp_message) {
 	}
 
 	case MSP_RAW_GPS: {
-		last_groundCourse = *(int16_t *)&msp_message->payload[14];
+		last_groundCourse = *(int16_t *)&msp_message->payload[14] / 10; // protocol sends tenths of degrees
 		last_altitude = *(int16_t *)&msp_message->payload[10];
 		last_speed = *(int16_t *)&msp_message->payload[12];
 		//last_groundCourse = last_heading + stat_msp_ttl%90 -45; //Simulate offset 
@@ -1292,7 +1292,7 @@ static void draw_Ladder() {
 					double usable_w   = ahi_width - margin_px;
 					double px_per_deg = usable_w / HFOV_deg;     // ~6.222 if margin=40, else 6.667
 
-					double center_x   = start_x + usable_w * 0.5;
+					double center_x   = start_x + ahi_width * 0.5;
 
 					// direction_offset in DEGREES (see note below about /10)
 					double off = direction_offset;
