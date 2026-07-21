@@ -15,6 +15,14 @@
 #include "osd/msp/msp_displayport.h"
 
 #if defined(_x86) || defined(__ROCKCHIP__)
+static void poi_toggle_enabled(void);
+static void map_toggle_enabled(void);
+static int  map_config_enabled(void);
+static void DrawMap(int32_t lat_e7, int32_t lon_e7, int16_t heading_deg, int16_t course_deg,
+                    bool over_phase);
+static void map_zoom_step(int dir);
+static void map_follow_cycle(void);
+uint64_t get_time_ms(void);   // defined later in osd.c; used by the throttled OSD raise
 // #include <cairo/cairo.h>
 // #include <cairo/cairo-xlib.h>
 // #include <X11/Xlib.h>
@@ -53,6 +61,7 @@
 
 #include "osd/util/interface.h"
 #include "osd/util/settings.h"
+#include "osd/util/simple_ini.h"
 
 #include "osd.h"
 #include "osd/util/subtitle.h"
@@ -141,6 +150,11 @@ static int16_t last_groundCourse = 0;
 static int16_t last_altitude = 0;
 static int16_t last_speed = 0;
 static int16_t last_vario = 0; //cm/s
+#if defined(_x86) || defined(__ROCKCHIP__)
+static uint8_t last_gps_fix = 0;               // GS map/POI only (not read on air units)
+static int32_t last_lat = 0;   //deg * 1e7 (MSP_RAW_GPS)
+static int32_t last_lon = 0;   //deg * 1e7
+#endif
 
 static msp_state_t *msp_state;
 
@@ -249,6 +263,77 @@ uint64_t get_time_ms() {
 	//		return get_current_time_ms_Old();
 	return ts.tv_sec * 1000LL + ts.tv_nsec / 1000000;
 }
+
+#if defined(_x86) || defined(__ROCKCHIP__)
+/* GS runtime state file (home/target), resolved next to the binary by
+ * gs_state_path() in simple_ini.c — not CWD-relative, so the OSD map and the
+ * leaflet mapserver always share one file no matter where msposd is launched. */
+#define GS_STATE_PATH gs_state_path()
+
+static bool gs_seen_disarmed = false;
+static bool gs_home_pending = false;
+static bool gs_home_captured_armed_cycle = false;
+
+static bool gs_mode_active(void) {
+	return !DrawOSD;
+}
+
+static bool current_gps_valid(void) {
+	return last_gps_fix > 0 && !(last_lat == 0 && last_lon == 0);
+}
+
+static int write_gs_home_state(void) {
+	char lat_buf[32];
+	char lon_buf[32];
+
+	snprintf(lat_buf, sizeof(lat_buf), "%.7f", last_lat / 10000000.0);
+	snprintf(lon_buf, sizeof(lon_buf), "%.7f", last_lon / 10000000.0);
+
+	if (!WriteIniIntPath(GS_STATE_PATH, "home", "set", 0))
+		return 0;
+	if (!WriteIniStringPath(GS_STATE_PATH, "home", "lat", lat_buf))
+		return 0;
+	if (!WriteIniStringPath(GS_STATE_PATH, "home", "lon", lon_buf))
+		return 0;
+	return WriteIniIntPath(GS_STATE_PATH, "home", "set", 1);
+}
+
+static void capture_home_if_pending(void) {
+	if (!gs_mode_active() || !gs_home_pending || gs_home_captured_armed_cycle || !armed ||
+		!current_gps_valid())
+		return;
+
+	if (write_gs_home_state()) {
+		gs_home_captured_armed_cycle = true;
+		gs_home_pending = false;
+		if (verbose)
+			printf("GS home captured: lat=%.7f lon=%.7f\n", last_lat / 10000000.0,
+				last_lon / 10000000.0);
+	} else if (verbose) {
+		printf("GS home capture skipped: failed to update %s\n", GS_STATE_PATH);
+	}
+}
+
+static void update_gs_home_capture(bool was_armed, bool now_armed) {
+	if (!gs_mode_active()) {
+		gs_home_pending = false;
+		gs_home_captured_armed_cycle = false;
+		return;
+	}
+
+	if (!now_armed) {
+		gs_seen_disarmed = true;
+		gs_home_pending = false;
+		gs_home_captured_armed_cycle = false;
+		return;
+	}
+
+	if (!was_armed && gs_seen_disarmed && !gs_home_captured_armed_cycle) {
+		gs_home_pending = true;
+		capture_home_if_pending();
+	}
+}
+#endif
 
 
 
@@ -451,7 +536,13 @@ static void rx_msp_callback(msp_msg_t *msp_message) {
 	switch (msp_message->cmd) {
 	case MSP_CMD_STATUS: {
 		// we need the armed state
+#if defined(_x86) || defined(__ROCKCHIP__)
+		bool was_armed = armed;
+#endif
 		armed = (msp_message->payload[6] & 0x01);
+#if defined(_x86) || defined(__ROCKCHIP__)
+		update_gs_home_capture(was_armed, armed);
+#endif
 		if (armed)
 			vtxMenuActive = false;
 		break;
@@ -530,9 +621,17 @@ static void rx_msp_callback(msp_msg_t *msp_message) {
 	}
 
 	case MSP_RAW_GPS: {
+#if defined(_x86) || defined(__ROCKCHIP__)
+		last_gps_fix = msp_message->payload[0];         // GS map/POI only; skipped on air units
+		last_lat = *(int32_t *)&msp_message->payload[2];  // deg * 1e7
+		last_lon = *(int32_t *)&msp_message->payload[6];  // deg * 1e7
+#endif
 		last_groundCourse = *(int16_t *)&msp_message->payload[14] / 10; // protocol sends tenths of degrees
 		last_altitude = *(int16_t *)&msp_message->payload[10];
 		last_speed = *(int16_t *)&msp_message->payload[12];
+#if defined(_x86) || defined(__ROCKCHIP__)
+		capture_home_if_pending();
+#endif
 		//last_groundCourse = last_heading + stat_msp_ttl%90 -45; //Simulate offset 
 		break;
 	}
@@ -870,6 +969,11 @@ static void AHI_FilterUpdate(AhiFilterState *st,
     st->roll_deg  += alpha * (roll_deg  - st->roll_deg);
 }
 
+
+#if defined(_x86) || defined(__ROCKCHIP__)
+#include "osd/util/poi_osd.c"   // POI direction markers (GS rendering only)
+#include "osd/util/map_render.c" // Offline moving-map overlay (GS rendering only)
+#endif
 
 /// @brief Ugly implementation. To do : clear from bmp format dependant code
 static void draw_Ladder() {
@@ -1331,6 +1435,12 @@ static void draw_Ladder() {
 			}
 		}
 	} // draw ladder
+
+#if defined(_x86) || defined(__ROCKCHIP__)
+	DrawPOIs(last_lat, last_lon, last_altitude, last_heading,
+	         pitch_degree, pos_y, f, vFOV_deg);
+#endif
+
 	Transform_Pitch = savedTransformPitch;
 }
 
@@ -2229,6 +2339,13 @@ static void draw_screenBMP2(bool OnlyAHI) {
 		// ClearScreen();
 		Render(bmp_x86, bmpBuff.u32Width, bmpBuff.u32Height);
 
+		// Moving map, UNDER-OSD slot (default): painted beneath the glyphs (DEST_OVER)
+		// so it layers as video < map < OSD. Must run after Render() (which lays the
+		// glyph base and, on x86, points cr at this frame) and before the overlays.
+		// heading orients the plane icon; ground course drives the lead/rotation.
+		// The map paints here only when [map] on_top=0.
+		DrawMap(last_lat, last_lon, last_heading, last_groundCourse, /*over_phase=*/false);
+
 		if (AHI_Enabled == 2)
 			draw_AHI();
 		if (AHI_Enabled == 1 || AHI_Enabled > 2)
@@ -2259,6 +2376,10 @@ static void draw_screenBMP2(bool OnlyAHI) {
 			drawText(air_unit_info_msg, posX, posY, getcolor(msg_colour),
 				 osd_font_size, false, 1, 0.2);
 		}
+
+		// Moving map, OVER-OSD slot: painted last (over everything) with OVER. Paints
+		// here only when [map] on_top=1; use map opacity<100 to see the OSD through it.
+		DrawMap(last_lat, last_lon, last_heading, last_groundCourse, /*over_phase=*/true);
 
 		FlushDrawing();
 	}

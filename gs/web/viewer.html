@@ -1,0 +1,912 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>GS Map</title>
+<link rel="stylesheet" href="leaflet.css" />
+<script src="leaflet.js"></script>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; }
+  #map { position: absolute; inset: 0; }
+  /* In center follow-mode the map container is expanded 2× so rotating it never
+     reveals unloaded tile corners. overflow:hidden on body clips the excess. */
+  body.center-mode { overflow: hidden; }
+  /* In center mode #map is sized & positioned by JS (setupCenterMap) as a large
+     square centred on the plane so CSS rotation never reveals unloaded tiles. */
+  body.center-mode #map { inset: auto; right: auto; bottom: auto; }
+  .plane-icon svg, .home-icon svg { display: block; }
+  .plane-icon svg { transition: transform 0.1s linear; }
+  /* Scale bar: readable on dark/satellite tiles. */
+  .leaflet-control-scale-line { background: rgba(0,0,0,0.55); color: #fff;
+    border-color: rgba(255,255,255,0.8); font-size: 11px; padding: 1px 6px; }
+  /* In overlay modes the plane can be anywhere on screen — pulse it so it's easy to spot. */
+  @keyframes planeBlink { 0% { fill: #ffec3d; } 50% { fill: #ff3b30; } 100% { fill: #ffec3d; } }
+  body.overlay .plane-icon path { animation: planeBlink 1s ease-in-out infinite; }
+  @keyframes headingBlink { 0% { stroke: #ffec3d; } 50% { stroke: #ff3b30; } 100% { stroke: #ffec3d; } }
+  body.overlay .heading-line {
+    animation: headingBlink 1s ease-in-out infinite;
+    stroke-linecap: round;
+  }
+  #toolbox {
+    position: absolute; top: 8px; right: 8px; z-index: 1000;
+    display: flex; flex-direction: column; gap: 8px; align-items: stretch;
+  }
+  body.overlay #toolbox { display: none; }       /* preview / full: no toolbox */
+  #panel {
+    font: 12px/1.35 sans-serif; color: #fff;
+    background: rgba(0,0,0,0.6); padding: 10px; border-radius: 6px; width: 190px;
+  }
+  #panel input { width: 70px; }
+  #panel .row { display: flex; justify-content: space-between; align-items: center; margin: 3px 0; }
+  #panel .checkrow { justify-content: flex-start; }
+  #panel .checkrow label { display: flex; align-items: center; gap: 4px; white-space: nowrap; }
+  #panel .checkrow input[type="checkbox"] { width: auto; margin: 0; }
+  /* POI type selection tree (preflight only) */
+  #poipanel {
+    font: 12px/1.3 sans-serif; color: #fff;
+    background: rgba(0,0,0,0.6); padding: 8px; border-radius: 6px;
+    width: 240px; max-height: 400px; display: flex; flex-direction: column;
+  }
+  #poipanel .poihdr {
+    flex: 0 0 auto;
+    display: flex; align-items: center; gap: 6px; cursor: pointer;
+    font-weight: bold; margin-bottom: 0; user-select: none;
+  }
+  #poipanel .poihdr .caret {
+    display: inline-block; width: 12px; color: #9cf; text-align: center;
+  }
+  #poibody { margin-top: 6px; min-height: 0; overflow: hidden; }
+  #poitree { max-height: 350px; overflow-y: auto; overflow-x: hidden; padding-right: 4px; }
+  #poitree input { width: auto; margin: 0 3px 0 0; vertical-align: middle; }
+  .poikind { cursor: pointer; user-select: none; padding: 1px 0; white-space: nowrap; }
+  .poikind .caret { display: inline-block; width: 10px; color: #9cf; }
+  .poikids { margin-left: 16px; }
+  .poirow { display: block; cursor: pointer; padding: 1px 0; white-space: nowrap; }
+  /* flashed POI markers: pulse so they're easy to spot for the 5 s preview */
+  @keyframes poiFlashPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+  .poi-flash-dot {
+    display: block; width: 18px; height: 18px; box-sizing: border-box;
+    border: 2px solid #fff; border-radius: 50%; background: #ff2d2d;
+    box-shadow: 0 0 0 2px #000; animation: poiFlashPulse 0.8s ease-in-out infinite;
+  }
+  .poi-flash-icon { background: transparent; border: 0; }
+  #poimsg {
+    position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
+    z-index: 1100; background: rgba(0,0,0,0.78); color: #fff;
+    font: 13px sans-serif; padding: 6px 12px; border-radius: 6px; display: none;
+  }
+  #dlBtn { width: 100%; margin-top: 6px; padding: 7px; cursor: pointer;
+           font-weight: bold; border: 0; border-radius: 4px; }
+  #dlBtn:disabled { opacity: 0.5; cursor: default; }
+  #dlBtn.downloading { opacity: 1; cursor: progress; }
+  /* determinate progress bar with an animated barber-pole so it's clearly "live" */
+  #dlbar { display: none; height: 8px; margin-top: 5px; border-radius: 4px;
+           background: rgba(0,0,0,0.45); overflow: hidden; }
+  #dlbar.on { display: block; }
+  #dlbarfill { height: 100%; width: 0%; background-color: #2ecc71;
+    background-image: repeating-linear-gradient(45deg,
+      rgba(255,255,255,0.30) 0 8px, rgba(255,255,255,0) 8px 16px);
+    background-size: 22px 22px; animation: dlStripes 0.7s linear infinite;
+    transition: width 0.3s ease; }
+  @keyframes dlStripes { from { background-position: 0 0; } to { background-position: 22px 0; } }
+  #dlstatus { margin-top: 4px; min-height: 14px; opacity: 0.85; }
+  #exportBtn { width: 100%; margin-top: 6px; padding: 6px; cursor: pointer;
+    font-weight: bold; border: 0; border-radius: 4px; background: #2f6fb0; color: #fff; }
+  #exportBtn:disabled { opacity: 0.4; cursor: default; }
+  /* empty-state caption inside the POI tree */
+  .poi-empty { opacity: 0.85; font-size: 12px; line-height: 1.4; padding: 4px 2px; }
+  .poi-empty b { color: #ffd24d; }
+  .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 5px; }
+  .on { background: #52c41a; } .off { background: #ff4d4f; }
+  hr { border: 0; border-top: 1px solid #444; margin: 8px 0; }
+  #status { margin-top: 6px; opacity: 0.8; }
+  .hint { opacity: 0.7; font-size: 11px; }
+#zoombtns { display: none; position: absolute; bottom: 10px; right: 10px; z-index: 1000; }
+  #zoombtns button { display: block; width: 30px; height: 30px; margin-top: 5px;
+    background: rgba(0,0,0,0.65); color: #fff; border: 1px solid #555;
+    border-radius: 5px; font-size: 20px; line-height: 1; cursor: pointer; padding: 0; }
+  #zoombtns button:disabled { opacity: 0.25; cursor: default; }
+  #onlinectl {
+    display: none; position: absolute; right: 48px; bottom: 10px; z-index: 1000;
+    font: 11px/1.2 sans-serif; color: #ff4d4f; background: transparent;
+    padding: 2px 4px; border-radius: 0; user-select: none;
+  }
+  #onlinectl input { margin: 0 4px 0 0; vertical-align: middle; }
+  #followbtn {
+    display: none; position: absolute; right: 110px; bottom: 10px; z-index: 1000;
+    min-width: 54px; background: rgba(0,0,0,0.65); color: #fff; border: 1px solid #555;
+    border-radius: 5px; font: 11px/1.2 sans-serif; padding: 4px 6px; cursor: pointer;
+  }
+  body.center-mode #onlinectl { right: 48px; padding: 2px 0; }
+  body.center-mode #onlinectl input { margin: 0; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<label id="onlinectl"><input type="checkbox" id="onlineChk"><span>online</span></label>
+<button id="followbtn" type="button"><span>plane</span></button>
+<div id="zoombtns">
+  <button id="zinBtn" title="Zoom in">+</button>
+  <button id="zoutBtn" title="Zoom out">−</button>
+</div>
+<div id="toolbox">
+  <div id="panel">
+    <div class="row"><span><span id="netdot" class="dot off"></span><span id="nettext">checking…</span></span></div>
+    <div class="row"><span>Basemap</span><select id="basemap" style="width:110px"></select></div>
+    <div class="hint">Scroll &amp; drag to your area (<b id="zlevel">z–</b>), then:</div>
+    <button id="dlBtn">⬇ Download visible area</button>
+    <div id="dlbar"><div id="dlbarfill"></div></div>
+    <div id="dlstatus"></div>
+    <div id="cacheinfo" class="hint"></div>
+    <button id="exportBtn" title="Save the downloaded tiles + POIs as a pack to copy to the OSD station" disabled>⭱ Export map pack…</button>
+    <div class="row checkrow" style="margin-top:4px"><label><input type="checkbox" id="covChk"> Show downloaded</label></div>
+    <div class="row checkrow"><label><input type="checkbox" id="offChk"> Offline mode</label></div>
+    <div id="covstatus" class="hint"></div>
+    <hr>
+    <div class="hint">Click the map to set a target.</div>
+    <div class="row"><span>Target lat</span><input id="tlat" type="number" step="0.0001"></div>
+    <div class="row"><span>Target lon</span><input id="tlon" type="number" step="0.0001"></div>
+    <div class="row">
+      <button id="setBtn" style="flex:1;margin-right:4px">Set</button>
+      <button id="clrBtn" style="flex:1">Clear</button>
+    </div>
+    <div id="status">no fix</div>
+  </div>
+  <div id="poipanel">
+    <div class="poihdr" id="poihdr"><span class="caret" id="poicaret">▸</span><span>POI types on OSD</span></div>
+    <div id="poibody" style="display:none">
+      <div class="hint" style="margin-bottom:4px">counts are totals; OSD draws English-named, in-range</div>
+      <div id="poitree">loading…</div>
+    </div>
+  </div>
+</div>
+<div id="poimsg"></div>
+<script>
+const params = new URLSearchParams(location.search);
+const MODE = params.get("mode") || "preflight";     // preflight | preview | full
+const FOLLOW_MODES = ["plane", "center", "fit"];
+let FOLLOW = params.get("follow") || "plane";       // plane | fit | center
+const PREFLIGHT = MODE === "preflight";
+if (!PREFLIGHT) document.body.classList.add("overlay");
+
+const ZOOMS = [11, 13, 15];
+const HIGHEST_ZOOM = Math.max(...ZOOMS);
+const HEADING_VECTOR_PX = 52;
+const EARTH_M_PER_DEG = 111320;
+const OVERLAY_KEEP_BUFFER = 16;
+const VIEW_UPDATE_MS = 250;
+const VIEW_UPDATE_PX = 48;
+const FIT_UPDATE_PX = 32;
+const TILE_REFRESH_MS = 350;
+let MAX_TILES = 8000;
+let FIXED_ZOOM = HIGHEST_ZOOM;        // overlay modes always start at the highest stored zoom
+let target = null, home = null, haveFix = false;
+let lastViewMs = 0;
+let lastTileRefreshMs = 0;
+let lastHere = null;
+let lastCourse = 0;
+let lastFitCenterPx = null;
+
+const map = L.map("map", {
+  zoomControl: PREFLIGHT, attributionControl: false,
+  dragging: PREFLIGHT, scrollWheelZoom: PREFLIGHT,
+  doubleClickZoom: PREFLIGHT, boxZoom: PREFLIGHT, keyboard: PREFLIGHT,
+  minZoom: 2, maxZoom: 18,
+}).setView([42.2, 27.8], 13);
+
+// Distance ruler / scale bar (metric). In center mode #map rotates and is offset,
+// so the scale would tilt and slide off-screen — move its element to the body so it
+// stays upright and pinned to the window corner. Leaflet keeps updating it via the
+// map 'move'/'zoom' events regardless of where its element lives in the DOM.
+const scaleCtl = L.control.scale({ position: "bottomleft", imperial: false, maxWidth: 120 }).addTo(map);
+const scaleEl = scaleCtl.getContainer();
+const scaleHome = scaleEl.parentNode;
+
+// ?src=<basemap> gives each basemap its own browser-cache key (forces fresh fetch on switch).
+let basemap = "Satellite";
+let offlineTest = !PREFLIGHT;     // overlay defaults to cache-only; preflight keeps online-friendly default
+function tileUrl() {
+  return "tiles/{z}/{x}/{y}?src=" + encodeURIComponent(basemap) + (offlineTest ? "&offline=1" : "");
+}
+const tileLayer = L.tileLayer(tileUrl(), {
+  minZoom: 2, maxZoom: 18,
+  keepBuffer: PREFLIGHT ? 4 : OVERLAY_KEEP_BUFFER,
+  updateWhenIdle: PREFLIGHT,
+  updateInterval: PREFLIGHT ? 200 : 80,
+}).addTo(map);
+// Center (track-up) mode: size #map as a square centred on the plane's on-screen
+// position, with half-side reaching the farthest window corner from that pivot.
+// Because the square is centred on the pivot, rotating it about its centre always
+// covers the whole window in every direction — no unloaded gaps "in front" of the
+// plane. (A symmetric viewport expansion can't do this: the pivot is off-centre.)
+const PLANE_Y_FRAC = 0.8;   // plane sits 80% down the window in center mode
+function setupCenterMap() {
+  const el = map.getContainer();
+  const vw = window.innerWidth, vh = window.innerHeight;
+  const px = vw * 0.5, py = vh * PLANE_Y_FRAC;            // plane pivot, window coords
+  let D = 0;
+  for (const [cx, cy] of [[0, 0], [vw, 0], [0, vh], [vw, vh]])
+    D = Math.max(D, Math.hypot(cx - px, cy - py));         // farthest window corner
+  const side = Math.ceil(2 * D) + 4;                       // square covering a disk of radius D
+  el.style.width  = side + "px";
+  el.style.height = side + "px";
+  el.style.left = (px - side / 2) + "px";
+  el.style.top  = (py - side / 2) + "px";
+  el.style.transformOrigin = "50% 50%";                    // rotate about plane (= element centre)
+  map.invalidateSize();
+}
+function enableCenterMode() {
+  document.body.classList.add("center-mode");
+  scaleEl.style.position = "fixed";
+  scaleEl.style.left = "8px";
+  scaleEl.style.bottom = "8px";
+  scaleEl.style.zIndex = 1000;
+  if (scaleEl.parentNode !== document.body) document.body.appendChild(scaleEl);
+  setupCenterMap();
+}
+function disableCenterMode() {
+  document.body.classList.remove("center-mode");
+  scaleEl.style.position = "";
+  scaleEl.style.left = "";
+  scaleEl.style.bottom = "";
+  scaleEl.style.zIndex = "";
+  if (scaleHome && scaleEl.parentNode !== scaleHome) scaleHome.appendChild(scaleEl);
+  const el = map.getContainer();
+  el.style.width = "";
+  el.style.height = "";
+  el.style.left = "";
+  el.style.top = "";
+  el.style.transformOrigin = "";
+  el.style.transform = "";
+  map.invalidateSize();
+}
+function applyFollowMode(force = false) {
+  lastFitCenterPx = null;
+  if (FOLLOW === "center") enableCenterMode();
+  else disableCenterMode();
+  if (haveFix && lastHere) updateView(lastHere, lastCourse, force);
+}
+window.addEventListener("resize", () => {
+  if (FOLLOW === "center") setupCenterMap();
+});
+
+const basemapSel = document.getElementById("basemap");
+basemapSel.onchange = () => {
+  basemap = basemapSel.value; tileLayer.setUrl(tileUrl()); saveSettings({ basemap });
+  refreshCoverage(); refreshCacheSummary();    // per-basemap
+};
+
+// --- markers / layers -------------------------------------------------------
+// Icon is created once; rotation is applied to the live element (rotatePlane) so the
+// blink CSS animation isn't restarted on every telemetry update.
+function planeIcon() {
+  return L.divIcon({
+    className: "plane-icon", iconSize: [26, 26], iconAnchor: [13, 13],
+    html: `<svg width="26" height="26" viewBox="-14 -14 28 28">
+             <path d="M0,-12 L1.6,-5 L1.6,-2 L11,3 L11,5 L1.6,2 L1.6,8 L4,11 L4,12.5 L0,11
+                      L-4,12.5 L-4,11 L-1.6,8 L-1.6,2 L-11,5 L-11,3 L-1.6,-2 L-1.6,-5 Z"
+                   fill="#ffec3d" stroke="#000" stroke-width="0.8"/></svg>`,
+  });
+}
+function rotatePlane(deg) {
+  const el = plane.getElement();
+  const svg = el && el.querySelector("svg");
+  if (svg) svg.style.transform = `rotate(${deg}deg)`;
+}
+const homeIcon = L.divIcon({
+  className: "home-icon", iconSize: [22, 22], iconAnchor: [11, 16],
+  html: `<svg width="22" height="22" viewBox="-11 -11 22 22">
+           <path d="M-8,1 L0,-7 L8,1 Z" fill="#ff7875" stroke="#000" stroke-width="0.8"/>
+           <rect x="-5" y="1" width="10" height="7" fill="#fff1b8" stroke="#000" stroke-width="0.8"/></svg>`,
+});
+const plane = L.marker([0, 0], { icon: planeIcon(), interactive: false });
+const homeMarker = L.marker([0, 0], { icon: homeIcon, interactive: false });
+const headingLine = L.polyline([], {
+  className: "heading-line",
+  color: "#ffec3d",
+  weight: 2,
+  dashArray: "6,4",
+  interactive: false
+});
+const targetLine = L.polyline([], {
+  color: "#ff4d4f",
+  weight: 2,
+  dashArray: "1,6",
+  lineCap: "round",
+  interactive: false
+});
+const targetMarker = L.circleMarker([0, 0], { radius: 6, color: "#ff4d4f", weight: 2, fill: false, interactive: false });
+
+function applyTarget() {
+  if (target) targetMarker.setLatLng([target.lat, target.lon]).addTo(map);
+  else { map.removeLayer(targetMarker); targetLine.setLatLngs([]); }
+}
+function applyHome() {
+  if (home) homeMarker.setLatLng([home.lat, home.lon]).addTo(map);
+  else map.removeLayer(homeMarker);
+}
+
+// --- target editing (preflight only) ----------------------------------------
+function setTarget(t) {           // t = {lat,lon} or null
+  target = t; applyTarget();
+  if (t) { tlat.value = t.lat.toFixed(5); tlon.value = t.lon.toFixed(5); }
+  else { tlat.value = ""; tlon.value = ""; }
+  fetch("target", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(t ? { lat: t.lat, lon: t.lon } : { lat: null, lon: null }) });
+}
+if (PREFLIGHT) {
+  map.on("click", (e) => setTarget({ lat: e.latlng.lat, lon: e.latlng.lng }));
+  document.getElementById("setBtn").onclick = () => {
+    const lat = parseFloat(tlat.value), lon = parseFloat(tlon.value);
+    if (Number.isFinite(lat) && Number.isFinite(lon)) setTarget({ lat, lon });
+  };
+  document.getElementById("clrBtn").onclick = () => setTarget(null);
+}
+
+// --- POI type selection tree (preflight) ------------------------------------
+// Loads kind/subtype/count from /poi-types, lets the user toggle which types the
+// OSD draws, and persists the choice via POST /poi-selection (debounced).
+if (PREFLIGHT) {
+  var poitree = document.getElementById("poitree");
+  var poihdr = document.getElementById("poihdr");
+  var poibody = document.getElementById("poibody");
+  var poicaret = document.getElementById("poicaret");
+  var poiSel = [];                 // parallel to the fetched items: {kind,subtype,enabled}
+  var saveTimer = null;
+
+  poihdr.onclick = () => {
+    const open = poibody.style.display !== "none";
+    poibody.style.display = open ? "none" : "block";
+    poicaret.textContent = open ? "▸" : "▾";
+  };
+
+  // Briefly flash the POIs of a just-checked type on the map as small red circles.
+  var poiFlash = L.layerGroup().addTo(map);
+  var flashTimer = null;
+  var poimsg = document.getElementById("poimsg");
+  var poimsgTimer = null;
+  function showPoiMsg(text) {
+    poimsg.textContent = text; poimsg.style.display = "block";
+    clearTimeout(poimsgTimer);
+    poimsgTimer = setTimeout(() => { poimsg.style.display = "none"; }, 5000);
+  }
+  function flashPois(kind, subtype) {              // subtype null = the whole kind
+    const label = subtype ? `${kind}/${subtype}` : kind;
+    const b = map.getBounds();
+    showPoiMsg(`loading ${label} POIs...`);
+    fetch(`landmarks?n=${b.getNorth()}&s=${b.getSouth()}&e=${b.getEast()}&w=${b.getWest()}`)
+      .then(r => r.json()).then(items => {
+        poiFlash.clearLayers();
+        var n = 0;
+        for (var j = 0; j < items.length; j++) {
+          var lm = items[j];
+          if (lm.kind !== kind) continue;
+          if (subtype !== null && (lm.subtype || "") !== subtype) continue;
+          L.marker([lm.lat, lm.lon], {
+            interactive: false,
+            icon: L.divIcon({
+              className: "poi-flash-icon",
+              iconSize: [22, 22],
+              iconAnchor: [11, 11],
+              html: '<span class="poi-flash-dot"></span>',
+            }),
+          }).addTo(poiFlash);
+          n++;
+        }
+        showPoiMsg(n ? `${n} ${label} POI${n === 1 ? "" : "s"} shown`
+                     : `0 ${label} POIs in current view — pan/zoom to the area`);
+        clearTimeout(flashTimer);
+        flashTimer = setTimeout(() => poiFlash.clearLayers(), 5000);
+      }).catch(() => showPoiMsg(`failed to load ${label} POIs`));
+  }
+
+  function saveSel() {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => {
+      fetch("poi-selection", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ selection: poiSel }) });
+    }, 300);
+  }
+
+  function buildPoiTree(items) {
+    poiSel = items.map(it => ({ kind: it.kind, subtype: it.subtype, enabled: it.enabled }));
+    poitree.innerHTML = "";
+    const byKind = {};
+    items.forEach((it, i) => (byKind[it.kind] = byKind[it.kind] || []).push(i));
+
+    for (const kind of Object.keys(byKind)) {
+      const idxs = byKind[kind];
+      const total = idxs.reduce((s, i) => s + items[i].count, 0);
+      const grp = document.createElement("div");
+
+      const hdr = document.createElement("div");
+      hdr.className = "poikind";
+      const caret = document.createElement("span"); caret.className = "caret"; caret.textContent = "▸";
+      const kcb = document.createElement("input"); kcb.type = "checkbox";
+      const klbl = document.createElement("span"); klbl.textContent = `${kind} (${total})`;
+      hdr.append(caret, kcb, klbl);
+
+      const kids = document.createElement("div");
+      kids.className = "poikids"; kids.style.display = "none";
+      const childCbs = [];
+      idxs.forEach(i => {
+        const row = document.createElement("div"); row.className = "poirow";
+        row.dataset.poiIndex = i;
+        const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = poiSel[i].enabled;
+        cb.dataset.poiIndex = i;
+        const t = document.createElement("span"); t.textContent = `${items[i].subtype || "—"} (${items[i].count})`;
+        row.append(cb, t); kids.append(row); childCbs.push(cb);
+      });
+
+      function syncKind() {
+        const on = idxs.map(i => poiSel[i].enabled);
+        kcb.checked = on.every(Boolean);
+        kcb.indeterminate = !kcb.checked && on.some(Boolean);
+      }
+      function poiRowFrom(target) {
+        while (target && target !== kids) {
+          if (target.classList && target.classList.contains("poirow")) return target;
+          target = target.parentNode;
+        }
+        return null;
+      }
+      function applyChildSelection(i, checked) {
+        if (poiSel[i].enabled === checked) return;
+        poiSel[i].enabled = checked;
+        childCbs[idxs.indexOf(i)].checked = checked;
+        syncKind(); saveSel();
+      }
+      kids.onclick = (e) => {
+        const row = poiRowFrom(e.target);
+        if (!row) return;
+        e.stopPropagation();
+        const i = Number(row.dataset.poiIndex);
+        const cb = row.querySelector("input");
+        if (e.target !== cb) cb.checked = !cb.checked;
+        if (cb.checked) {
+          flashPois(items[i].kind, items[i].subtype);
+        }
+        applyChildSelection(i, cb.checked);
+      };
+      function applyKindSelection(on) {
+        if (idxs.every(i => poiSel[i].enabled === on)) return;
+        idxs.forEach((i, j) => { poiSel[i].enabled = on; childCbs[j].checked = on; });
+        kcb.indeterminate = false; saveSel();
+      }
+      kcb.onclick = (e) => {
+        e.stopPropagation();                       // don't toggle the expander
+        if (kcb.checked) {
+          flashPois(kind, null);
+        }
+        applyKindSelection(kcb.checked);
+      };
+      hdr.onclick = () => {
+        const open = kids.style.display === "none";
+        kids.style.display = open ? "block" : "none";
+        caret.textContent = open ? "▾" : "▸";
+      };
+      syncKind();
+      grp.append(hdr, kids); poitree.append(grp);
+    }
+  }
+  // (Re)load the POI tree. Shows a clear caption when nothing is downloaded yet,
+  // and is called again after a download so freshly fetched POIs show up without
+  // a page reload. Exposed globally so the download poller can trigger it.
+  function reloadPoiTree() {
+    fetch("poi-types").then(r => r.json()).then(items => {
+      if (!items || items.length === 0) {
+        poitree.innerHTML =
+          '<div class="poi-empty"><b>No POIs downloaded yet.</b><br>' +
+          'Use <b>⬇ Download visible area</b> — the landmarks for that region are ' +
+          'fetched automatically and will appear here.</div>';
+        return;
+      }
+      buildPoiTree(items);
+    }).catch(() => {
+      poitree.innerHTML =
+        '<div class="poi-empty">Could not load POIs. Download a map area first.</div>';
+    });
+  }
+  window.reloadPoiTree = reloadPoiTree;
+  reloadPoiTree();
+}
+
+// --- tile download (preflight) ----------------------------------------------
+function lonlat2tile(latlng, z) {
+  const n = 1 << z, lat = latlng.lat * Math.PI / 180;
+  return { x: Math.floor((latlng.lng + 180) / 360 * n),
+           y: Math.floor((1 - Math.asinh(Math.tan(lat)) / Math.PI) / 2 * n) };
+}
+function visibleTileCount() {
+  const b = map.getBounds(); let total = 0;
+  for (const z of ZOOMS) {
+    const a = lonlat2tile(b.getNorthWest(), z), c = lonlat2tile(b.getSouthEast(), z);
+    total += (Math.abs(c.x - a.x) + 1) * (Math.abs(c.y - a.y) + 1);
+  }
+  return total;
+}
+const dlBtn = document.getElementById("dlBtn"), dlStatus = document.getElementById("dlstatus");
+const dlBar = document.getElementById("dlbar"), dlFill = document.getElementById("dlbarfill");
+const exportBtn = document.getElementById("exportBtn");
+function updateEstimate() {
+  if (!PREFLIGHT) return;
+  if (dlBtn.classList.contains("downloading")) return;   // don't clobber the live state
+  const n = visibleTileCount();
+  dlBtn.disabled = n > MAX_TILES;
+  dlBtn.textContent = n > MAX_TILES ? `Zoom in to download (${n} tiles)` : `⬇ Download visible area (~${n} tiles)`;
+}
+function startDownloadUI() {
+  dlBtn.disabled = true; dlBtn.classList.add("downloading");
+  dlBtn.textContent = "Downloading…";
+  dlBar.classList.add("on"); dlFill.style.width = "0%";
+  dlStatus.textContent = "starting…";
+}
+function setDownloadProgress(done, total) {
+  const pct = total ? Math.round(done / total * 100) : 0;
+  dlFill.style.width = pct + "%";
+  dlStatus.textContent = `downloading ${done}/${total} (${pct}%)…`;
+}
+function endDownloadUI() {
+  dlBtn.classList.remove("downloading");
+  dlBar.classList.remove("on"); dlFill.style.width = "0%";
+  updateEstimate();                                       // restores button label + disabled state
+}
+function updateZoomLabel() {
+  const el = document.getElementById("zlevel");
+  if (el) el.textContent = "z" + map.getZoom();
+}
+if (PREFLIGHT) {
+  map.on("moveend zoomend", updateEstimate);
+  map.on("zoomend", updateZoomLabel);
+  updateZoomLabel();
+  dlBtn.onclick = () => {
+    const b = map.getBounds();
+    startDownloadUI();
+    fetch("download", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ north: b.getNorth(), south: b.getSouth(), east: b.getEast(), west: b.getWest() }) })
+      .then(r => r.json()).then(j => { if (j.error) { dlStatus.textContent = j.error; endDownloadUI(); } else pollDownload(); })
+      .catch(() => { dlStatus.textContent = "download failed to start"; endDownloadUI(); });
+  };
+}
+function pollDownload() {
+  fetch("download").then(r => r.json()).then(s => {
+    if (s.state === "running") {
+      setDownloadProgress(s.done || 0, s.total || 0);
+      setTimeout(pollDownload, 500);
+    } else {
+      endDownloadUI();
+      dlStatus.textContent = s.msg || s.state;
+      tileLayer.redraw(); refreshCoverage(); refreshCacheSummary();
+      if (window.reloadPoiTree) window.reloadPoiTree();    // show POIs fetched with this area
+    }
+  });
+}
+function saveSettings(patch) {
+  fetch("settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch) });
+}
+
+// --- downloaded-coverage overlay (preflight) --------------------------------
+const coverageLayer = L.layerGroup();
+function num2deg(x, y, z) {
+  const n = 1 << z;
+  const lat = Math.atan(Math.sinh(Math.PI * (1 - 2 * y / n))) * 180 / Math.PI;
+  return [lat, x / n * 360 - 180];
+}
+function nearestStoredZoom() {
+  const z = map.getZoom();
+  return ZOOMS.reduce((a, b) => Math.abs(b - z) < Math.abs(a - z) ? b : a);
+}
+function storedZoomIndex(z = map.getZoom()) {
+  return ZOOMS.indexOf(z);
+}
+function stepStoredZoom(delta) {
+  const current = nearestStoredZoom();
+  const idx = ZOOMS.indexOf(current);
+  const next = Math.max(0, Math.min(ZOOMS.length - 1, idx + delta));
+  map.setZoom(ZOOMS[next], { animate: false });
+}
+function snapToStoredZoom() {
+  const snapped = nearestStoredZoom();
+  if (map.getZoom() !== snapped) map.setZoom(snapped, { animate: false });
+}
+function applyOfflineMode() {
+  tileLayer.setUrl(tileUrl());
+  if (offlineTest) {
+    map.setZoom(nearestStoredZoom(), { animate: false });
+    map.on("zoomend", snapToStoredZoom);
+  } else {
+    map.off("zoomend", snapToStoredZoom);
+  }
+  updateZoomBtns();
+}
+const covChk = PREFLIGHT ? document.getElementById("covChk") : null;
+const covStatus = PREFLIGHT ? document.getElementById("covstatus") : null;
+const cacheInfo = PREFLIGHT ? document.getElementById("cacheinfo") : null;
+function refreshCacheSummary() {
+  if (!PREFLIGHT) return;
+  fetch(`cache?src=${encodeURIComponent(basemap)}`).then(r => r.json()).then(c => {
+    const lmPart = c.lm_count ? ` · ${c.lm_count} POIs` : "";
+    if (exportBtn) exportBtn.disabled = !c.total;   // only exportable once something is downloaded
+    if (!c.total) { cacheInfo.textContent = `${basemap}: nothing downloaded yet${lmPart}`; return; }
+    const per = c.zooms.map(z => `z${z.z} ${z.count}`).join(" · ");
+    cacheInfo.textContent = `${basemap} cached: ${per} — ${c.total} tiles${lmPart}`;
+  });
+}
+// Export the current basemap's pack (its .mbtiles + landmarks.db) as one zip. The
+// browser's download handles the "user-defined location"; server sets the filename.
+if (exportBtn) exportBtn.onclick = () => {
+  if (exportBtn.disabled) return;
+  const a = document.createElement("a");
+  a.href = "export?src=" + encodeURIComponent(basemap);
+  a.download = "";                                  // force download; use server filename
+  document.body.appendChild(a); a.click(); a.remove();
+};
+function refreshCoverage() {
+  if (!PREFLIGHT || !covChk.checked) return;
+  const z = nearestStoredZoom(), b = map.getBounds();
+  const u = `coverage?src=${encodeURIComponent(basemap)}&z=${z}` +
+            `&n=${b.getNorth()}&s=${b.getSouth()}&e=${b.getEast()}&w=${b.getWest()}`;
+  fetch(u).then(r => r.json()).then(d => {
+    coverageLayer.clearLayers();
+    if (d.truncated) { covStatus.textContent = `zoom in to see z${d.z} coverage`; return; }
+    for (const [x, y] of d.present) {
+      L.rectangle([num2deg(x, y + 1, z), num2deg(x + 1, y, z)],
+        { color: "#52c41a", weight: 0, fillColor: "#52c41a", fillOpacity: 0.25, interactive: false })
+        .addTo(coverageLayer);
+    }
+    covStatus.textContent = `${d.present.length}/${d.want} tiles cached at z${z} (${basemap})`;
+  });
+}
+if (PREFLIGHT) {
+  covChk.onchange = () => {
+    if (covChk.checked) { coverageLayer.addTo(map); refreshCoverage(); }
+    else { map.removeLayer(coverageLayer); covStatus.textContent = ""; }
+  };
+  document.getElementById("offChk").onchange = (e) => {
+    offlineTest = e.target.checked;
+    applyOfflineMode();
+  };
+  map.on("moveend", refreshCoverage);
+}
+
+
+// --- overlay zoom buttons (±1 from FIXED_ZOOM, only in preview/full modes) --
+const zinBtn = document.getElementById("zinBtn");
+const zoutBtn = document.getElementById("zoutBtn");
+function updateZoomBtns() {
+  if (PREFLIGHT) return;
+  const z = map.getZoom();
+  if (offlineTest) {
+    const idx = storedZoomIndex();
+    zinBtn.disabled = idx >= ZOOMS.length - 1;
+    zoutBtn.disabled = idx <= 0;
+  } else {
+    zinBtn.disabled  = z >= FIXED_ZOOM + 1;
+    zoutBtn.disabled = z <= FIXED_ZOOM - 1;
+  }
+}
+function zoomOverlayIn() {
+  if (offlineTest) stepStoredZoom(1);
+  else map.setZoom(Math.min(map.getZoom() + 1, FIXED_ZOOM + 1));
+}
+function zoomOverlayOut() {
+  if (offlineTest) stepStoredZoom(-1);
+  else map.setZoom(Math.max(map.getZoom() - 1, FIXED_ZOOM - 1));
+}
+if (!PREFLIGHT) {
+  const onlineCtl = document.getElementById("onlinectl");
+  const onlineChk = document.getElementById("onlineChk");
+  const followBtn = document.getElementById("followbtn");
+  const followBtnLabel = followBtn.querySelector("span");
+  const cycleFollowMode = () => {
+    const idx = FOLLOW_MODES.indexOf(FOLLOW);
+    FOLLOW = FOLLOW_MODES[(idx + 1) % FOLLOW_MODES.length];
+    followBtnLabel.textContent = FOLLOW;
+    followBtn.title = FOLLOW;
+    applyFollowMode(true);
+  };
+  onlineCtl.style.display = "block";
+  followBtn.style.display = "block";
+  followBtnLabel.textContent = FOLLOW;
+  followBtn.title = FOLLOW;
+  onlineChk.checked = false;
+  onlineChk.onchange = (e) => {
+    offlineTest = !e.target.checked;
+    applyOfflineMode();
+  };
+  followBtn.onclick = cycleFollowMode;
+  document.getElementById("zoombtns").style.display = "block";
+  zinBtn.onclick  = zoomOverlayIn;
+  zoutBtn.onclick = zoomOverlayOut;
+  map.on("zoomend", () => {
+    if (offlineTest) snapToStoredZoom();
+    updateZoomBtns();
+  });
+  window.addEventListener("keydown", (ev) => {
+    if (ev.key === "+" || ev.key === "=") {
+      ev.preventDefault();
+      zoomOverlayIn();
+    } else if (ev.key === "-") {
+      ev.preventDefault();
+      zoomOverlayOut();
+    } else if (ev.key === "Enter") {
+      ev.preventDefault();
+      cycleFollowMode();
+    }
+  });
+}
+applyFollowMode(true);
+
+// --- telemetry (SSE) --------------------------------------------------------
+function projectAhead(lat, lon, bearingDeg, distM) {
+  const rad = bearingDeg * Math.PI / 180;
+  return [lat + distM * Math.cos(rad) / EARTH_M_PER_DEG,
+          lon + distM * Math.sin(rad) / (EARTH_M_PER_DEG * Math.cos(lat * Math.PI / 180))];
+}
+function projectAheadPx(lat, lon, bearingDeg, distPx, z = map.getZoom()) {
+  const rad = bearingDeg * Math.PI / 180;
+  const startPx = map.project([lat, lon], z);
+  const endPx = startPx.add(L.point(distPx * Math.sin(rad), -distPx * Math.cos(rad)));
+  const end = map.unproject(endPx, z);
+  return [end.lat, end.lng];
+}
+const LEAD_FRAC = 0.30;     // offset plane this fraction of the screen, opposite course
+function validCoord(lat, lon) {
+  return Number.isFinite(lat) && Number.isFinite(lon)
+    && lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180
+    && !(Math.abs(lat) < 1e-7 && Math.abs(lon) < 1e-7);
+}
+
+// Place the plane off-center so more map shows ahead of it. The plane sits at
+// (0.5 - LEAD*dx, 0.5 - LEAD*dy) of the view, where (dx,dy) is the course unit vector in
+// screen coords (dy down), Chebyshev-normalized so the dominant axis gets the full lead:
+//   N -> 50%/80%,  E -> 20%/50%,  NE -> 20%/80%.
+function leadCenter(here, courseDeg, z) {
+  const rad = courseDeg * Math.PI / 180;
+  let dx = Math.sin(rad), dy = -Math.cos(rad);          // east=+x, north=-y
+  const m = Math.max(Math.abs(dx), Math.abs(dy)) || 1;
+  dx /= m; dy /= m;
+  const size = map.getSize();
+  const planePx = map.project(here, z);
+  const centerPx = planePx.add(L.point(LEAD_FRAC * dx * size.x, LEAD_FRAC * dy * size.y));
+  return map.unproject(centerPx, z);
+}
+function refreshOverlayTiles(force = false) {
+  if (PREFLIGHT) return;
+  const now = performance.now();
+  if (!force && now - lastTileRefreshMs < TILE_REFRESH_MS) return;
+  tileLayer.redraw();
+  if (FOLLOW === "center") map.invalidateSize(false);
+  lastTileRefreshMs = now;
+}
+// All points FIT must keep in view: plane, plus home and target when set —
+// matches the OSD map's fit mode (osd/util/map_render.c) so both agree.
+function fitPoints(here) {
+  const pts = [here];
+  if (home)   pts.push([home.lat, home.lon]);
+  if (target) pts.push([target.lat, target.lon]);
+  return pts;
+}
+function shouldUpdateFit(pts) {
+  const center = L.latLngBounds(pts).getCenter();
+  const centerPx = map.project(center, map.getZoom());
+  if (!lastFitCenterPx) {
+    lastFitCenterPx = centerPx;
+    return true;
+  }
+  if (centerPx.distanceTo(lastFitCenterPx) < FIT_UPDATE_PX) return false;
+  lastFitCenterPx = centerPx;
+  return true;
+}
+function setOverlayView(target, z, force = false) {
+  const zoomChanged = map.getZoom() !== z;
+  const now = performance.now();
+  const deltaMs = now - lastViewMs;
+  if (!force && !zoomChanged && deltaMs < VIEW_UPDATE_MS) return false;
+
+  const targetPx = map.project(target, z);
+  const centerPx = map.project(map.getCenter(), z);
+  const deltaPx = targetPx.distanceTo(centerPx);
+  if (!force && !zoomChanged && deltaPx < VIEW_UPDATE_PX) return false;
+
+  map.setView(target, z, { animate: false });
+  lastViewMs = now;
+  refreshOverlayTiles(force || zoomChanged);
+  return true;
+}
+function updateView(here, courseDeg, force = false) {
+  if (PREFLIGHT) return;
+  const mapEl = map.getContainer();
+  const fitPts = FOLLOW === "fit" ? fitPoints(here) : null;
+  if (fitPts && fitPts.length >= 2) {
+    if (!force && !shouldUpdateFit(fitPts)) return;
+    mapEl.style.transform = "";
+    map.fitBounds(fitPts, { padding: [40, 40], animate: false });
+    if (force) refreshOverlayTiles(true);
+  } else if (FOLLOW === "center") {
+    // Track-up: plane stays at the #map centre (= window 50%,80%) and the whole
+    // map rotates so the course points up. The over-sized square from
+    // setupCenterMap() guarantees tile coverage at every rotation angle.
+    const z = haveFix ? map.getZoom() : FIXED_ZOOM;
+    setOverlayView(here, z, force || !haveFix);
+    mapEl.style.transform = `rotate(${-courseDeg}deg)`;
+  } else {
+    // plane mode (default)
+    mapEl.style.transform = "";
+    const z = haveFix ? map.getZoom() : FIXED_ZOOM;
+    setOverlayView(leadCenter(here, courseDeg, z), z, force || !haveFix);
+  }
+}
+const es = new EventSource("pos");
+es.onmessage = (ev) => {
+  const d = JSON.parse(ev.data);
+  if (!validCoord(d.lat, d.lon)) {
+    document.getElementById("status").textContent =
+      `no valid GPS  fix ${d.fix}  sats ${d.sats}`;
+    return;
+  }
+  const here = [d.lat, d.lon];
+  lastHere = here;
+  lastCourse = d.course;
+  if (!plane._map) { plane.addTo(map); headingLine.addTo(map); }
+  plane.setLatLng(here);
+  rotatePlane(FOLLOW === "center" ? d.course : d.heading);
+  headingLine.setLatLngs([here, projectAheadPx(d.lat, d.lon, d.heading, HEADING_VECTOR_PX)]);
+  if (target) targetLine.addTo(map).setLatLngs([here, [target.lat, target.lon]]);
+  updateView(here, d.course);
+  haveFix = true;
+  document.getElementById("status").textContent =
+    `fix ${d.fix}  sats ${d.sats}  hdg ${d.heading}  crs ${Math.round(d.course)}`;
+};
+
+// --- init / poll ------------------------------------------------------------
+let inited = false;
+function refreshStatus() {
+  fetch("status").then(r => r.json()).then(s => {
+    MAX_TILES = s.max_tiles || MAX_TILES;
+    if (PREFLIGHT && s.zoom) FIXED_ZOOM = s.zoom;
+    if (!PREFLIGHT) FIXED_ZOOM = HIGHEST_ZOOM;
+    updateZoomBtns();
+    const dot = document.getElementById("netdot"), txt = document.getElementById("nettext");
+    dot.className = "dot " + (s.online ? "on" : "off");
+    txt.textContent = s.online ? "online" : (s.mbtiles ? "offline (cached)" : "offline (no tiles)");
+
+    home = s.home ? { lat: s.home.lat, lon: s.home.lon } : null; applyHome();
+
+    if (!inited) {
+      if (s.basemaps) {
+        // Grey out (disable) basemaps that need an API key none is configured for.
+        const disabled = new Set(s.basemaps_disabled || []);
+        basemapSel.innerHTML = s.basemaps.map(b =>
+          `<option value="${b}"${disabled.has(b) ? " disabled" : ""}>${b}${disabled.has(b) ? " (needs key)" : ""}</option>`
+        ).join("");
+        let want = s.basemap || s.basemaps[0];
+        if (disabled.has(want)) want = s.basemaps.find(b => !disabled.has(b)) || want;
+        basemap = want; basemapSel.value = basemap; tileLayer.setUrl(tileUrl());
+      }
+      if (s.target) setTargetLocal(s.target);
+      // initial view: home (overlay) or last-downloaded center (preflight)
+      if (!PREFLIGHT) {
+        if (home) map.setView([home.lat, home.lon], FIXED_ZOOM, { animate: false });
+        else if (s.center) map.setView([s.center[0], s.center[1]], FIXED_ZOOM, { animate: false });
+        else map.setZoom(FIXED_ZOOM, { animate: false });
+      } else if (s.center) {
+        map.setView([s.center[0], s.center[1]], FIXED_ZOOM, { animate: false });
+      }
+      refreshCacheSummary();
+      inited = true;
+    }
+    updateEstimate();
+  });
+}
+function setTargetLocal(t) {     // adopt server target without re-POSTing
+  target = { lat: t.lat, lon: t.lon }; applyTarget();
+  tlat.value = t.lat.toFixed(5); tlon.value = t.lon.toFixed(5);
+}
+refreshStatus();
+setInterval(refreshStatus, PREFLIGHT ? 15000 : 5000);
+updateEstimate();
+</script>
+</body>
+</html>
