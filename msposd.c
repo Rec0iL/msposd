@@ -54,7 +54,7 @@ extern char* recording_dir;
 // libevent base main loop
 struct event_base *base = NULL;
 
-int serial_fd = 0;
+int serial_fd = -1;
 int in_sock = 0;
 int MSPUDPPort = 0;
 int MSP_PollRate = 20;
@@ -1217,40 +1217,43 @@ static int handle_data(const char *port_name, int baudrate, const char *out_addr
 		printf("Listening UART on %s...\n", port_name);
 	}
 
-	struct termios options;
-	tcgetattr(serial_fd, &options);
-	cfsetspeed(&options, speed_by_value(baudrate));
+	// In UDP mode there is no UART; do not apply raw termios settings to stdin.
+	if (serial_fd >= 0) {
+		struct termios options;
+		tcgetattr(serial_fd, &options);
+		cfsetspeed(&options, speed_by_value(baudrate));
 
-	options.c_cflag &= ~CSIZE;	// Mask the character size bits
-	options.c_cflag |= CS8;		// 8 bit data
-	options.c_cflag &= ~PARENB; // set parity to no
-	options.c_cflag &= ~PARODD; // set parity to no
-	options.c_cflag &= ~CSTOPB; // set one stop bit
+		options.c_cflag &= ~CSIZE;	// Mask the character size bits
+		options.c_cflag |= CS8;		// 8 bit data
+		options.c_cflag &= ~PARENB; // set parity to no
+		options.c_cflag &= ~PARODD; // set parity to no
+		options.c_cflag &= ~CSTOPB; // set one stop bit
 
-	options.c_cflag |= (CLOCAL | CREAD);
-	options.c_oflag &= ~OPOST;
+		options.c_cflag |= (CLOCAL | CREAD);
+		options.c_oflag &= ~OPOST;
 
-	options.c_lflag &= 0;
-	options.c_iflag &= 0; // disable software flow controll
-	options.c_oflag &= 0;
+		options.c_lflag &= 0;
+		options.c_iflag &= 0; // disable software flow controll
+		options.c_oflag &= 0;
 
-	if (enable_simple_uart)
-		options.c_iflag |= (UART_FCR_TRIGGER_RX_L3); //#define UART_FCR_TRIGGER_RX_L3 0x10000
-													 // will work only on patched kernel driver
+		if (enable_simple_uart)
+			options.c_iflag |= (UART_FCR_TRIGGER_RX_L3); //#define UART_FCR_TRIGGER_RX_L3 0x10000
+														 // will work only on patched kernel driver
 
-	cfmakeraw(&options);
-	tcsetattr(serial_fd, TCSANOW, &options);
+		cfmakeraw(&options);
+		tcsetattr(serial_fd, TCSANOW, &options);
 #ifdef _x86
-	usleep(500 * 1000); // flush all data in the Rx buffer
-	int tttt = tcflush(serial_fd, TCIOFLUSH);
+		usleep(500 * 1000); // flush all data in the Rx buffer
+		int tttt = tcflush(serial_fd, TCIOFLUSH);
 #endif
-	if (enable_simple_uart)
-		tcflush(serial_fd, TCIOFLUSH);
+		if (enable_simple_uart)
+			tcflush(serial_fd, TCIOFLUSH);
 
-	// tell the fc what vtx config we support
-	if (mspVTXenabled) {
-		printf("Setup mspVTX ...\n");
-		msp_set_vtx_config(serial_fd);
+		// tell the fc what vtx config we support
+		if (mspVTXenabled) {
+			printf("Setup mspVTX ...\n");
+			msp_set_vtx_config(serial_fd);
+		}
 	}
 
 	if (strlen(out_addr) > 1) {
@@ -1280,7 +1283,7 @@ static int handle_data(const char *port_name, int baudrate, const char *out_addr
 	// Test inject a simple packet to test malvink communication Camera to Ground
 	signal(SIGUSR1, sendtestmsg);
 
-	if (serial_fd > 0 && !enable_simple_uart) { // if UART opened and we need to read it via events
+	if (serial_fd >= 0 && !enable_simple_uart) { // if UART opened and we need to read it via events
 		serial_bev = bufferevent_socket_new(base, serial_fd, 0);
 
 		// Trigger the read callback only whenever there is at least 16 bytes of data in the buffer.
@@ -1355,7 +1358,7 @@ static int handle_data(const char *port_name, int baudrate, const char *out_addr
 
 	// MSP_PollRate
 	if (ParseMSP && msp_tmr == NULL &&
-		serial_fd > 0) { // Only if we are on Cam, on ground no need to poll
+		serial_fd >= 0) { // Only if we are on Cam, on ground no need to poll
 		msp_tmr = event_new(base, -1, EV_PERSIST, poll_msp, &serial_fd);
 		// Set poll interval to 50 milliseconds if pollrate is 20
 		struct timeval interval = {
@@ -1391,12 +1394,12 @@ err:
 	if (sig_int)
 		event_free(sig_int);
 
+	CloseMSP();
+
 	if (base)
 		event_base_free(base);
 
 	libevent_global_shutdown();
-
-	CloseMSP();
 
 	return ret;
 }

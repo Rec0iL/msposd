@@ -614,7 +614,7 @@ void FlushDrawing() {
     if (x11_event == NULL && base != NULL) {
         // Attach X11 display's file descriptor to the existing msposd
         // event_base
-        struct event *x11_event =
+        x11_event =
             event_new(base, ConnectionNumber(display), EV_READ | EV_PERSIST, event_callback, NULL);
         event_add(x11_event, NULL);
 
@@ -722,7 +722,6 @@ void Close() {
 
 	// Cleanup
 	event_free(x11_event);
-	event_base_free(base);
 #endif
 }
 
