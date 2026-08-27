@@ -25,3 +25,15 @@ Appearance alone would not have caught it.
 gcc -Wall -o test_elements osd/elements/test_elements.c osd/elements/osd_elements.c
 ./test_elements
 ```
+
+## Theme tests
+
+```sh
+gcc -Wall -D_GNU_SOURCE -o test_theme osd/widgets/test_theme.c osd/widgets/osd_theme.c \
+    osd/elements/osd_elements.c -I osd/widgets
+./test_theme     # run from the repo root, it loads themes/tactical/theme.ini
+```
+
+Covers the parts that matter operationally: a malformed theme must keep its
+defaults rather than disable the OSD, values are clamped, and `mode = classic`
+turns every widget off in one key.
