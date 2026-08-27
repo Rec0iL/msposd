@@ -7,9 +7,12 @@ msposd or platform dependencies so it can be built and checked on its own.
 ## Visual check
 
 ```sh
-gcc -I. -o preview osd/widgets/preview.c osd/widgets/osd_paint.c libpng/lodepng.c -lm
+gcc -I. -I bmp/lib -o preview osd/widgets/preview.c osd/widgets/osd_paint.c \
+    osd/widgets/osd_text.c bmp/lib/schrift.c libpng/lodepng.c -lm
 ./preview        # writes widget-preview.png
 ```
+
+Run it from the repo root: it loads `fonts/UbuntuMono-Regular.ttf` by relative path.
 
 Look at the PNG *and* sample pixel values. An earlier gradient bug rendered a
 plausible-looking coloured bar while the green and blue channels were silently
