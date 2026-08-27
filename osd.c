@@ -130,8 +130,23 @@ static uint8_t serial_passthrough = 1;
 static uint8_t compress = 0;
 static uint8_t no_btfl_hd = 0;
 
+// last_pitch/last_roll are the *rendered* attitude. They are eased toward the
+// newest packet by ahi_advance() instead of snapping to it, so the horizon moves
+// at the render rate rather than at the ~20Hz attitude packet rate.
 static int16_t last_pitch = 0;
 static int16_t last_roll = 0;
+
+// Interpolation segment: ease from the attitude that was on screen when the
+// packet arrived toward that packet's attitude, spread over the measured packet
+// interval. Costs one packet interval of latency (~50ms) and in exchange never
+// overshoots, so the horizon cannot wobble on abrupt stick inputs.
+static int16_t ahi_from_pitch = 0, ahi_from_roll = 0;
+static int16_t ahi_to_pitch = 0, ahi_to_roll = 0;
+static uint64_t ahi_seg_start_ms = 0;
+static uint64_t ahi_prev_pkt_ms = 0;
+static float ahi_seg_len_ms = 50.0f; // EMA of the interval between attitude packets
+static bool ahi_interpolating = false;
+static bool ahi_have_packets = false;
 static int16_t last_heading = 0;
 
 static int16_t last_directionToHome = 0;
@@ -613,16 +628,42 @@ static void rx_msp_callback(msp_msg_t *msp_message) {
 		break;
 	}
 	case MSP_ATTITUDE: {
-		last_pitch = *(int16_t *)&msp_message->payload[2];
-		last_roll = *(int16_t *)&msp_message->payload[0];
+		int16_t new_pitch = *(int16_t *)&msp_message->payload[2];
+		int16_t new_roll = *(int16_t *)&msp_message->payload[0];
 		last_heading = *(int16_t *)&msp_message->payload[4];
 		stat_msp_msg_attitude++;
 		if (last_MSP_ATTITUDE>0)
 			stat_attitudeDelay = get_time_ms() - last_MSP_ATTITUDE;		
 
 		if (strncmp(current_fc_identifier, "ARDU", 4) == 0)
-			if (abs(last_roll) < 900) // ARDU Pilot needs this fix to revert vertical AHI Direction
-				last_pitch = -last_pitch;
+			if (abs(new_roll) < 900) // ARDU Pilot needs this fix to revert vertical AHI Direction
+				new_pitch = -new_pitch;
+
+		{
+			// Start a new segment from whatever is on screen right now toward this
+			// packet. Measuring the real packet interval means the easing matches
+			// the actual telemetry rate instead of assuming one.
+			uint64_t now_ms = get_time_ms();
+			if (ahi_prev_pkt_ms > 0) {
+				float dt = (float)(now_ms - ahi_prev_pkt_ms);
+				if (dt > 5.0f && dt < 500.0f) // ignore stalls and duplicate packets
+					ahi_seg_len_ms += (dt - ahi_seg_len_ms) * 0.25f; // EMA
+			}
+			ahi_prev_pkt_ms = now_ms;
+
+			if (!ahi_have_packets) { // first packet: adopt it rather than easing from zero
+				last_pitch = new_pitch;
+				last_roll = new_roll;
+			}
+			ahi_have_packets = true;
+
+			ahi_from_pitch = last_pitch;
+			ahi_from_roll = last_roll;
+			ahi_to_pitch = new_pitch;
+			ahi_to_roll = new_roll;
+			ahi_seg_start_ms = now_ms;
+			ahi_interpolating = true;
+		}
 
 		//trace_fragment(false);
 		if (out_sock > 0 && fb_cursor > 0) { // if there is data to send		
@@ -641,10 +682,10 @@ static void rx_msp_callback(msp_msg_t *msp_message) {
 			}					
 		}		
 
-		//If AHI is not enabled in the settings, the mspdislpayport refresh rate is rather low and drawscreen is called 5-10 times per second.
-		// This makes the AHI refresh rate low, se we need to redraw it even when there is no complete mspdisplayport frame.
-		if (DrawOSD && (AHI_Enabled>0))
-			force_draw_ahi();//totally wrong approach to call it directly, but nore simple
+		// Previously this called force_draw_ahi() directly, which pinned the AHI to
+		// the attitude packet rate (~20Hz) and made it visibly step. osd_render_tick()
+		// now drives redraws at the configured render rate and interpolates between
+		// packets, so nothing is drawn here.
 
 		// printf("\n Got MSG_ATTITUDE            pitch:%d  roll:%d\n", pitch,
 		// roll);
@@ -870,6 +911,49 @@ BITMAP bmpFntSmall;
 
 uint16_t character_map[MAX_OSD_WIDTH][MAX_OSD_HEIGHT];
 uint16_t character_map_complete[MAX_OSD_WIDTH][MAX_OSD_HEIGHT];
+
+#include "osd/elements/osd_elements.h"
+
+#define OSD_MAX_ELEMENTS 32
+osd_element_t detected_elements[OSD_MAX_ELEMENTS];
+int detected_element_count = 0;
+
+// character_map_complete is [col][row].
+static uint16_t element_glyph_getter(int col, int row, void *ctx) {
+	(void)ctx;
+	if (col < 0 || col >= MAX_OSD_WIDTH || row < 0 || row >= MAX_OSD_HEIGHT)
+		return 0;
+	return character_map_complete[col][row];
+}
+
+// Re-scan the finished frame for recognisable elements. Cheap: a single pass
+// over the grid, only on a completed frame, not per render tick.
+static void scan_osd_elements() {
+	detected_element_count = osd_elements_scan(element_glyph_getter,
+		NULL,
+		MAX_OSD_WIDTH,
+		MAX_OSD_HEIGHT,
+		current_fc_identifier,
+		detected_elements,
+		OSD_MAX_ELEMENTS);
+
+	static int last_reported = -1;
+	if (verbose && detected_element_count != last_reported) {
+		last_reported = detected_element_count;
+		printf("OSD elements detected: %d\n", detected_element_count);
+		for (int i = 0; i < detected_element_count; i++) {
+			const osd_element_t *e = &detected_elements[i];
+			printf("  %-10s r%02d c%02d w%d  \"%s\" = %.4f%s\n",
+				osd_element_type_name(e->type),
+				e->row,
+				e->col,
+				e->width,
+				e->text,
+				e->value,
+				e->is_per_cell ? "  (per-cell)" : "");
+		}
+	}
+}
 
 struct osd *osds; // regions over the overlay
 
@@ -2474,6 +2558,53 @@ static void clear_screen() {
 static int draws = 0;
 
 
+// Shortest-path interpolation for roll, which wraps at +/-180 deg (+/-1800
+// decidegrees). A plain lerp would sweep the long way round when crossing the
+// wrap point and spin the horizon backwards.
+static int16_t ahi_lerp_angle(int16_t from, int16_t to, float t) {
+	int delta = (int)to - (int)from;
+	while (delta > 1800)
+		delta -= 3600;
+	while (delta < -1800)
+		delta += 3600;
+	int v = (int)from + (int)lrintf((float)delta * t);
+	while (v > 1800)
+		v -= 3600;
+	while (v < -1800)
+		v += 3600;
+	return (int16_t)v;
+}
+
+// Ease the rendered attitude toward the newest packet over the measured packet
+// interval. Returns true while the on-screen value is still changing, so idle
+// frames cost nothing.
+static bool ahi_advance() {
+	if (!ahi_interpolating)
+		return false;
+
+	float seg = ahi_seg_len_ms < 10.0f ? 10.0f : ahi_seg_len_ms;
+	float t = (float)(get_time_ms() - ahi_seg_start_ms) / seg;
+	if (t >= 1.0f) { // arrived; hold here until the next packet
+		t = 1.0f;
+		ahi_interpolating = false;
+	}
+
+	int16_t p = (int16_t)lrintf((float)ahi_from_pitch + (float)(ahi_to_pitch - ahi_from_pitch) * t);
+	int16_t r = ahi_lerp_angle(ahi_from_roll, ahi_to_roll, t);
+
+	bool changed = (p != last_pitch) || (r != last_roll);
+	last_pitch = p;
+	last_roll = r;
+	return changed;
+}
+
+void osd_render_tick() {
+	if (!DrawOSD || AHI_Enabled <= 0)
+		return;
+	if (ahi_advance())
+		force_draw_ahi();
+}
+
 static void force_draw_ahi() {
 	stat_MSP_draw_complete_count++;
 	draws++;
@@ -2486,6 +2617,7 @@ static void draw_complete() {
 	stat_MSP_draw_complete_count++;
 	draws++;
 	memcpy(character_map_complete, character_map, sizeof(character_map));
+	scan_osd_elements();
 	draw_screenBMP();
 
 	if (draws < 2 && bitmapFnt.pData == NULL) {

@@ -1171,6 +1171,12 @@ static void send_variant_request2(int serial_fd) {
 	// printf("Sent %d\n", res);
 }
 
+static struct event *render_tmr = NULL;
+
+static void render_tick(evutil_socket_t sock, short event, void *arg) {
+	osd_render_tick();
+}
+
 static void poll_msp(evutil_socket_t sock, short event, void *arg) {
 	int serial_fd = *((int *)arg);
 
@@ -1359,6 +1365,23 @@ uart_configured:
 		}
 	}
 
+	// Render tick: drives AHI redraws at the configured rate and interpolates
+	// attitude between packets. Without this the horizon only moves when an
+	// MSP_ATTITUDE packet lands (~20Hz), which is visibly steppy.
+	if (DrawOSD && AHI_Enabled > 0) {
+		int render_hz = 1000 / (MinTimeBetweenScreenRefresh > 0 ? MinTimeBetweenScreenRefresh : 50);
+		if (render_hz < 5)
+			render_hz = 5;
+		if (render_hz > 120)
+			render_hz = 120;
+		render_tmr = event_new(base, -1, EV_PERSIST, render_tick, NULL);
+		// Named variable: a compound literal's comma would be parsed as a macro
+		// argument separator by evtimer_add().
+		struct timeval render_interval = {.tv_sec = 0, .tv_usec = 1000000 / render_hz};
+		evtimer_add(render_tmr, &render_interval);
+		printf("AHI render tick: %d Hz (interpolated)\n", render_hz);
+	}
+
 	// MSP_PollRate
 	if (ParseMSP && msp_tmr == NULL &&
 		serial_fd >= 0) { // Only if we are on Cam, on ground no need to poll
@@ -1376,6 +1399,10 @@ uart_configured:
 	event_base_dispatch(base);
 
 err:
+	if (render_tmr) {
+		event_del(render_tmr);
+		render_tmr = NULL;
+	}
 	if (temp_tmr) {
 		event_del(temp_tmr);
 		event_free(temp_tmr);
