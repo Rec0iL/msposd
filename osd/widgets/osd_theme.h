@@ -59,6 +59,20 @@ typedef struct {
 	// unflyable - a minimap is the point.
 	int map_max_w, map_max_h;
 	char map_cache_dir[256];
+	// Speed-driven view. A fixed zoom is wrong at both ends of the speed range:
+	// hovering it shows a patch you could walk across, and at 30 m/s it shows
+	// where you have been. See osd_map_view_cfg_t for what each knob does.
+	// 0 = north is up, 1 = the ground track is up and the map turns under the
+	// aircraft. Track-up costs you a fixed frame of reference, so the compass
+	// rose is drawn whenever it is on.
+	int map_orientation;
+	bool map_auto_zoom;
+	int map_zoom_min, map_zoom_max;
+	float map_lookahead_s;
+	float map_lead_s;
+	float map_lead_max;
+	float map_zoom_settle_ms;
+	float map_smooth_ms;
 
 	// Artificial horizon. Colouring stays pitch-based - level, moderate and
 	// steep read differently at a glance, which is the point of the thing - but

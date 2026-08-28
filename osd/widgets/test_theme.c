@@ -10,6 +10,7 @@ static void check(const char *n, int c) {
 
 int main(void) {
     osd_theme_t t;
+    FILE *f;
 
     // defaults must stand alone
     osd_theme_defaults(&t);
@@ -27,8 +28,29 @@ int main(void) {
     // lat/lon are enabled now: they drive the map rather than drawing value panels
     check("shipped: latitude enabled for the map", t.elem_enabled[OSD_ELEM_LATITUDE]);
 
+    // shipped map view keys - the map follows ground speed, so these have to
+    // survive the parse or the view silently falls back to the defaults
+    check("shipped: auto zoom on", t.map_auto_zoom);
+    check("shipped: zoom range parsed", t.map_zoom_min == 14 && t.map_zoom_max == 17);
+    check("shipped: look-ahead parsed", t.map_lookahead_s > 19.9f && t.map_lookahead_s < 20.1f);
+    check("shipped: lead parsed", t.map_lead_s > 5.9f && t.map_lead_s < 6.1f);
+    check("shipped: lead cap parsed", t.map_lead_max > 0.34f && t.map_lead_max < 0.36f);
+    check("shipped: settle time parsed", t.map_zoom_settle_ms > 2999.0f);
+    check("shipped: fixed zoom still parsed", t.map_zoom == 16);
+
+    // a bad map value must leave the view usable rather than pinning it at zero
+    osd_theme_defaults(&t);
+    f = fopen("/tmp/_mv.ini", "w");
+    fputs("[map]\nauto_zoom = perhaps\nlookahead = soon\nlead_max = 9.0\nzoom_min = 99\n", f);
+    fclose(f);
+    osd_theme_load(&t, "/tmp/_mv.ini");
+    check("bad auto_zoom keeps default", t.map_auto_zoom);
+    check("bad lookahead keeps default", t.map_lookahead_s > 19.9f);
+    check("lead cap clamped below 1.0", t.map_lead_max <= 0.9f);
+    check("zoom_min clamped to a real zoom", t.map_zoom_min <= 19);
+
     // mode switch
-    FILE *f = fopen("/tmp/_m.ini", "w");
+    f = fopen("/tmp/_m.ini", "w");
     fputs("[osd]\nmode = classic\nopacity = 0.5\n", f); fclose(f);
     check("mode switches to classic", osd_theme_load(&t, "/tmp/_m.ini") && t.mode == OSD_MODE_CLASSIC);
     check("classic disables widgets", !osd_theme_element_enabled(&t, OSD_ELEM_VOLTAGE));

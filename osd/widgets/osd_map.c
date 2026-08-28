@@ -141,13 +141,48 @@ int osd_map_visible_tiles(double lat, double lon, int zoom, int w, int h, osd_ma
 
 void osd_map_point_in_view(double lat, double lon, double centre_lat, double centre_lon, int zoom,
 	int w, int h, float *x, float *y) {
+	osd_map_point_in_view_rot(lat, lon, centre_lat, centre_lon, zoom, w, h, 0.0f, x, y);
+}
+
+// Turning the map means rotating the (east, north) offset from the centre so
+// that the chosen bearing lands on screen-up, then projecting as usual. At
+// rot_deg 0 the matrix is the identity and this is plain north-up.
+void osd_map_point_in_view_rot(double lat, double lon, double centre_lat, double centre_lon,
+	int zoom, int w, int h, float rot_deg, float *x, float *y) {
 	double px, py, cx, cy;
 	osd_map_project(lat, lon, zoom, &px, &py);
 	osd_map_project(centre_lat, centre_lon, zoom, &cx, &cy);
+
+	// Screen y grows downwards, so north is -y.
+	const double east = px - cx;
+	const double north = -(py - cy);
+
+	const double a = (double)rot_deg * M_PI / 180.0;
+	const double ca = cos(a), sa = sin(a);
+	const double east_r = east * ca - north * sa;
+	const double north_r = east * sa + north * ca;
+
 	if (x)
-		*x = (float)(px - (cx - w / 2.0));
+		*x = (float)(w / 2.0 + east_r);
 	if (y)
-		*y = (float)(py - (cy - h / 2.0));
+		*y = (float)(h / 2.0 - north_r);
+}
+
+void osd_map_screen_to_world(double centre_x, double centre_y, int w, int h, float rot_deg,
+	double screen_x, double screen_y, double *world_x, double *world_y) {
+	const double sx = screen_x - w / 2.0;
+	const double sy = screen_y - h / 2.0;
+
+	const double a = (double)rot_deg * M_PI / 180.0;
+	const double ca = cos(a), sa = sin(a);
+	// Inverse of the rotation in osd_map_point_in_view_rot.
+	const double east = sx * ca - sy * sa;
+	const double north = -sx * sa - sy * ca;
+
+	if (world_x)
+		*world_x = centre_x + east;
+	if (world_y)
+		*world_y = centre_y - north;
 }
 
 int osd_map_zoom_for_span(double lat, double span_m, int w, int min_zoom, int max_zoom) {
@@ -164,4 +199,149 @@ int osd_map_zoom_for_span(double lat, double span_m, int w, int min_zoom, int ma
 			return z;
 	}
 	return min_zoom;
+}
+
+double osd_map_mpp(double lat, int zoom) {
+	if (zoom < 0)
+		zoom = 0;
+	if (zoom > 22)
+		zoom = 22;
+	const double equator_m = 40075016.686;
+	return equator_m * cos(clamp_lat(lat) * M_PI / 180.0) / ((double)(1u << zoom) * OSD_TILE_SIZE);
+}
+
+void osd_map_view_init(osd_map_view_t *v) {
+	if (v)
+		memset(v, 0, sizeof(*v));
+}
+
+// Exponential easing that does not change character with the frame rate: at
+// 60fps and at 10fps the view takes the same wall-clock time to settle.
+static float ease_alpha(float dt_ms, float tau_ms) {
+	if (dt_ms <= 0.0f)
+		return 0.0f; // no time has passed, so nothing moves
+	if (tau_ms <= 1.0f)
+		return 1.0f; // smoothing turned off in the theme
+	float a = 1.0f - expf(-dt_ms / tau_ms);
+	return a < 0.0f ? 0.0f : (a > 1.0f ? 1.0f : a);
+}
+
+void osd_map_view_update(osd_map_view_t *v, const osd_map_view_cfg_t *cfg, double lat, double lon,
+	float speed_mps, float course_deg, int w, int h, uint64_t now_ms, int *out_zoom,
+	double *out_lat, double *out_lon) {
+	if (!v || !cfg)
+		return;
+
+	int min_z = cfg->min_zoom, max_z = cfg->max_zoom;
+	if (min_z > max_z) {
+		int t = min_z;
+		min_z = max_z;
+		max_z = t;
+	}
+	// The track can run along either axis of the rectangle, so the shorter one
+	// is what has to hold the look-ahead.
+	int span_px = (w < h ? w : h);
+	if (span_px < 16)
+		span_px = 16;
+	if (!(speed_mps > 0.0f)) // also catches NaN from a bad telemetry frame
+		speed_mps = 0.0f;
+
+	if (!v->valid) {
+		v->valid = true;
+		v->speed_mps = speed_mps;
+		v->zoom = cfg->auto_zoom ? max_z : cfg->fixed_zoom;
+		v->want_zoom = v->zoom;
+		v->want_since_ms = now_ms;
+		v->lead_e = v->lead_n = 0.0;
+		v->last_ms = now_ms;
+	}
+
+	float dt_ms = (float)(now_ms - v->last_ms);
+	// A stall - a lost link, a paused replay - must not arrive as one enormous
+	// step that snaps the view across the map.
+	if (dt_ms < 0.0f || dt_ms > 2000.0f)
+		dt_ms = 0.0f;
+	v->last_ms = now_ms;
+
+	const float a = ease_alpha(dt_ms, cfg->smooth_ms);
+	v->speed_mps += (speed_mps - v->speed_mps) * a;
+
+	int target = cfg->fixed_zoom;
+	if (cfg->auto_zoom) {
+		double span_m = (double)v->speed_mps * (double)cfg->lookahead_s;
+		// Below the speed that fills the screen at max zoom there is nothing to
+		// gain by zooming out, so slow flight simply sits at the closest zoom.
+		double floor_m = osd_map_mpp(lat, max_z) * span_px;
+		if (!(span_m > floor_m))
+			span_m = floor_m;
+		target = osd_map_zoom_for_span(lat, span_m, span_px, min_z, max_z);
+	}
+	if (target != v->want_zoom) {
+		v->want_zoom = target;
+		v->want_since_ms = now_ms;
+	}
+	// A zoom change discards every tile on screen and fetches a new set, so it
+	// has to be worth doing: the new zoom must be what the speed has been asking
+	// for continuously, not what it asked for during one gust.
+	if (v->want_zoom != v->zoom && (float)(now_ms - v->want_since_ms) >= cfg->settle_ms)
+		v->zoom = v->want_zoom;
+	if (v->zoom < min_z)
+		v->zoom = min_z;
+	if (v->zoom > max_z)
+		v->zoom = max_z;
+
+	const double mpp = osd_map_mpp(lat, v->zoom);
+
+	double lead_m = (double)v->speed_mps * (double)cfg->lead_s;
+	// Cap the lead so the aircraft marker cannot be pushed off its own map.
+	double cap_m = (double)cfg->lead_max_frac * (span_px * 0.5) * mpp;
+	if (cap_m < 0.0)
+		cap_m = 0.0;
+	if (lead_m > cap_m)
+		lead_m = cap_m;
+
+	const double crs = (double)course_deg * M_PI / 180.0;
+
+	// Track direction for turning the map. Below walking pace a GPS course is
+	// noise, so the last usable heading is held rather than eased toward
+	// whatever the receiver happened to report.
+	// The *reported* speed, not the smoothed one: if the receiver says the
+	// aircraft is barely moving right now, its course is noise right now,
+	// whatever it was doing three seconds ago.
+	if (speed_mps > 1.5f) {
+		const double te = sin(crs), tn = cos(crs);
+		if (v->dir_e == 0.0 && v->dir_n == 0.0) {
+			v->dir_e = te;
+			v->dir_n = tn;
+		} else {
+			v->dir_e += (te - v->dir_e) * a;
+			v->dir_n += (tn - v->dir_n) * a;
+		}
+	}
+	// Eased as a vector rather than as a bearing and a length: a track crossing
+	// north would otherwise sweep the view the long way round through south.
+	const double target_e = lead_m * sin(crs);
+	const double target_n = lead_m * cos(crs);
+	v->lead_e += (target_e - v->lead_e) * a;
+	v->lead_n += (target_n - v->lead_n) * a;
+
+	double cx, cy;
+	osd_map_project(lat, lon, v->zoom, &cx, &cy);
+	// Mercator is conformal, so one metre on the ground is the same number of
+	// pixels in x and in y at a given latitude.
+	cx += v->lead_e / mpp;
+	cy -= v->lead_n / mpp;
+	osd_map_unproject(cx, cy, v->zoom, out_lat, out_lon);
+
+	if (out_zoom)
+		*out_zoom = v->zoom;
+}
+
+float osd_map_view_course(const osd_map_view_t *v) {
+	if (!v || (v->dir_e == 0.0 && v->dir_n == 0.0))
+		return 0.0f;
+	float deg = (float)(atan2(v->dir_e, v->dir_n) * 180.0 / M_PI);
+	if (deg < 0.0f)
+		deg += 360.0f;
+	return deg;
 }

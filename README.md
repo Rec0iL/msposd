@@ -1,5 +1,38 @@
 # MSPOSD
 
+> [!NOTE]
+> ## Fork: a custom ground-side widget OSD
+>
+> Upstream msposd draws the flight controller's own glyph OSD. This fork adds a
+> **widget layer** on top: it recognises what those glyphs *mean* and redraws
+> them as panels and a moving map, on the ground station rather than on the
+> camera.
+>
+> What this fork adds:
+>
+> - **Element recognition** (`osd/elements/`) — recovers type, value and the
+>   position you chose on the flight controller from the MSP DisplayPort glyph
+>   grid, per firmware.
+> - **Widget rendering** (`osd/widgets/`) — themed panels, bars and icons drawn
+>   with a small software rasteriser, plus a slippy-map minimap whose rectangle
+>   is defined by where you place latitude and longitude on the FC.
+> - **A map that follows the aircraft** — zoom scales to ground speed, the view
+>   leads along the ground track, and it can be turned track-up.
+> - **`--theme <path>`** — the theme is re-read whenever the file changes, so a
+>   settings front-end can retune the OSD live, mid-flight.
+>
+> Companion forks, both also work in progress: **aviateur** (a desktop settings
+> tab) and **PixelPilot_rk** (the same settings in the on-screen `gsmenu`). All
+> three write and read the one theme file.
+>
+> **Status: heavily work in progress.** Two of us are flying and testing it. It
+> breaks, the theme format still changes, and nothing here is stable.
+>
+> **No upstream pull requests are planned.** This fork exists to try ideas, not
+> to land them in the OpenIPC repositories. Issues and PRs belong here, not
+> there.
+
+
 A tool for drawing betaflight/inav/ardupilot MSP Display Port OSD over OpenIPC video stream.
 
 **Click the image below to watch a video sample:**

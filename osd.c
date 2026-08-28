@@ -928,13 +928,27 @@ static uint16_t element_glyph_getter(int col, int row, void *ctx) {
 
 #include "osd/widgets/osd_widgets.h"
 
-#define OSD_THEME_PATH "themes/tactical/theme.ini"
+// Relative by default, which is what a camera-side install wants: msposd runs
+// from its own directory and the theme ships beside it. A ground station passes
+// an absolute path with --theme instead, so msposd and whatever front-end edits
+// the settings are certainly reading and writing the same file.
+#define OSD_THEME_PATH_DEFAULT "themes/tactical/theme.ini"
 
 static osd_theme_t osd_theme;
 static osd_font_t *osd_widget_font = NULL;
 static osd_widget_state_t osd_widget_state;
 static bool osd_widgets_ready = false;
 static char osd_widget_font_path[256] = "";
+static char osd_theme_path[512] = OSD_THEME_PATH_DEFAULT;
+
+void osd_set_theme_path(const char *path) {
+	if (!path || !*path)
+		return;
+	snprintf(osd_theme_path, sizeof(osd_theme_path), "%s", path);
+	// Force a full reload rather than waiting on an mtime change: the new file
+	// may well be older than the one already loaded.
+	osd_widgets_ready = false;
+}
 
 // Loads the theme, and the font it names. Re-run when the theme file changes so
 // settings can be edited live; the font is only reloaded if its path changed.
@@ -943,12 +957,12 @@ static void widgets_sync_config() {
 	if (!osd_widgets_ready) {
 		osd_theme_defaults(&osd_theme);
 		osd_widgets_state_init(&osd_widget_state);
-		osd_theme_load(&osd_theme, OSD_THEME_PATH); // absent file just keeps defaults
+		osd_theme_load(&osd_theme, osd_theme_path); // absent file just keeps defaults
 		if (osd_theme.map_enabled)
 			osd_tiles_init(osd_theme.map_cache_dir);
 		osd_widgets_ready = true;
 		changed = true;
-	} else if (osd_theme_reload_if_changed(&osd_theme, OSD_THEME_PATH)) {
+	} else if (osd_theme_reload_if_changed(&osd_theme, osd_theme_path)) {
 		changed = true;
 		if (verbose)
 			printf("OSD theme reloaded: %s, mode=%s\n", osd_theme.name,
@@ -1174,6 +1188,11 @@ static void draw_widgets_overlay() {
 	osd_widgets_update_arm(&osd_widget_state, armed);
 	// last_heading is in degrees from MSP_ATTITUDE, used to orient the map marker
 	osd_widget_state.heading_deg = (float)last_heading;
+	// MSP_RAW_GPS: ground speed in cm/s, ground course in degrees. The map
+	// scales its zoom to the speed and leads along the *course* - in wind the
+	// nose and the track differ, and it is the track the map has to follow.
+	osd_widget_state.ground_speed_mps = (float)last_speed / 100.0f;
+	osd_widget_state.course_deg = (float)last_groundCourse;
 
 	osd_surface_t surf;
 	osd_surface_init(&surf, (uint8_t *)bmpBuff.pData, bmpBuff.u32Width, bmpBuff.u32Height,

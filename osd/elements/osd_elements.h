@@ -36,6 +36,13 @@ typedef struct {
 	uint8_t row;   // grid row
 	uint8_t col;   // leftmost grid column covered, including the symbol glyph
 	uint8_t width; // number of grid cells covered
+	// The edge of the run the flight controller keeps still. `col` and `width`
+	// track the glyphs actually on screen, so they move as a value gains or
+	// loses a digit (99 -> 100); anchoring a widget to them makes it jump.
+	// Values are right-aligned in their field, so for a trailing symbol the
+	// run grows leftwards and only its right edge is fixed.
+	uint8_t anchor_col;
+	bool anchor_right; // anchor_col is the run's rightmost cell, not its leftmost
 	float value;
 	bool value_valid;
 	// True when a voltage looks like a single cell rather than a whole pack.

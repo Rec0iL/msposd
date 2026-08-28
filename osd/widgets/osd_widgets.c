@@ -54,6 +54,8 @@ static const char *label_for(const osd_element_t *e) {
 	case OSD_ELEM_MAH: return "CAPACITY USED";
 	case OSD_ELEM_ALTITUDE: return "ALTITUDE";
 	case OSD_ELEM_RSSI: return "SIGNAL";
+	case OSD_ELEM_LATITUDE: return "LATITUDE";
+	case OSD_ELEM_LONGITUDE: return "LONGITUDE";
 	default: return "";
 	}
 }
@@ -160,6 +162,10 @@ static void format_value(const osd_element_t *e, float peak, int cells, char *ma
 		break;
 	case OSD_ELEM_ALTITUDE: snprintf(main, mn, "%.0fM", e->value); break;
 	case OSD_ELEM_MAH: snprintf(main, mn, "%.0fmAh", e->value); break;
+	// Straight from the flight controller: a float would round away the last
+	// digit of a coordinate, which is metres on the ground.
+	case OSD_ELEM_LATITUDE:
+	case OSD_ELEM_LONGITUDE: snprintf(main, mn, "%s", e->text); break;
 	case OSD_ELEM_RSSI: snprintf(main, mn, "%.0f%%", e->value); break;
 	default: snprintf(main, mn, "%s", e->text); break;
 	}
@@ -470,6 +476,36 @@ static void draw_aircraft(osd_surface_t *s, float cx, float cy, float size, floa
 	osd_fill_poly(s, tri, 3, c);
 }
 
+// North needle, for when the map no longer keeps north up. Without it a turning
+// map is unreadable: you can fly to it, but you cannot say where anything is.
+static void draw_north(osd_surface_t *s, osd_font_t *font, float cx, float cy, float r,
+	float rot_deg, osd_color_t c, osd_color_t halo) {
+	// North sits opposite the bearing that has been rotated to the top.
+	const float a = -rot_deg * (float)M_PI / 180.0f;
+	const float ca = cosf(a), sa = sinf(a);
+	// Needle tip, and the two tail corners, in a north-up frame then turned.
+	const float pts[3][2] = {{0.0f, -r}, {r * 0.42f, r * 0.45f}, {-r * 0.42f, r * 0.45f}};
+	osd_pointf_t tri[3];
+	for (int i = 0; i < 3; i++) {
+		tri[i].x = cx + pts[i][0] * ca - pts[i][1] * sa;
+		tri[i].y = cy + pts[i][0] * sa + pts[i][1] * ca;
+	}
+	osd_stroke_poly(s, tri, 3, r * 0.5f, halo);
+	osd_fill_poly(s, tri, 3, c);
+
+	if (font) {
+		// The letter rides just beyond the tip, so it labels the needle rather
+		// than a fixed corner of the map.
+		const float lx = cx + pts[0][0] * ca - (pts[0][1] - r * 0.62f) * sa;
+		const float ly = cy + pts[0][0] * sa + (pts[0][1] - r * 0.62f) * ca;
+		osd_text_metrics_t m;
+		if (osd_text_measure(font, 12.0f, "N", &m)) {
+			osd_text_draw(s, font, 12.0f, (int)(lx - m.width * 0.5f), (int)(ly + m.ascent * 0.5f),
+				"N", c);
+		}
+	}
+}
+
 // The rectangle the map occupies, capped to the theme maximum. Separate from
 // drawing so the layout pass can treat the map as an obstacle.
 static bool map_rect(const osd_theme_t *th, const osd_element_t *lat_e, const osd_element_t *lon_e,
@@ -484,6 +520,17 @@ static bool map_rect(const osd_theme_t *th, const osd_element_t *lat_e, const os
 	int y0 = ly < oy ? ly : oy;
 	int x1 = (ox + ow) > (lx + lw) ? (ox + ow) : (lx + lw);
 	int y1 = (oy + oh) > (ly + lh) ? (oy + oh) : (ly + lh);
+
+	// Two readouts on one row, or stacked one above the other, are a list - not
+	// the opposite corners of a rectangle. Read as a map they give a letterbox
+	// strip or a narrow column, so the placement is taken at face value and the
+	// coordinates are drawn as ordinary value panels instead.
+	if (lat_e->row == lon_e->row)
+		return false;
+	const int lat_end = lat_e->col + lat_e->width;
+	const int lon_end = lon_e->col + lon_e->width;
+	if (lat_e->col < lon_end && lon_e->col < lat_end)
+		return false; // their columns overlap: one is below the other
 
 	int w = x1 - x0, h = y1 - y0;
 	if (w > th->map_max_w)
@@ -505,14 +552,40 @@ static bool map_rect(const osd_theme_t *th, const osd_element_t *lat_e, const os
 // slow network costs detail rather than frame rate.
 static void draw_map(osd_surface_t *s, const osd_theme_t *th, osd_font_t *font,
 	const osd_element_t *lat_e, const osd_element_t *lon_e, const osd_grid_t *grid,
-	float heading_deg, bool home_valid, double home_lat, double home_lon) {
+	osd_widget_state_t *st, uint64_t now_ms) {
 	int x0, y0, w, h;
 	if (!map_rect(th, lat_e, lon_e, grid, &x0, &y0, &w, &h))
 		return;
 	const int x1 = x0 + w, y1 = y0 + h;
 
-	const double lat = lat_e->value, lon = lon_e->value;
-	const int zoom = th->map_zoom;
+	// Where the aircraft is, which is not the same as where the map looks: the
+	// view runs ahead of it along the ground track.
+	const double ac_lat = lat_e->value, ac_lon = lon_e->value;
+
+	const osd_map_view_cfg_t vcfg = {
+		.auto_zoom = th->map_auto_zoom,
+		.fixed_zoom = th->map_zoom,
+		.min_zoom = th->map_zoom_min,
+		.max_zoom = th->map_zoom_max,
+		.lookahead_s = th->map_lookahead_s,
+		.lead_s = th->map_lead_s,
+		.lead_max_frac = th->map_lead_max,
+		.settle_ms = th->map_zoom_settle_ms,
+		.smooth_ms = th->map_smooth_ms,
+	};
+	int zoom = th->map_zoom;
+	double lat = ac_lat, lon = ac_lon;
+	osd_map_view_update(&st->map_view, &vcfg, ac_lat, ac_lon, st->ground_speed_mps, st->course_deg,
+		w, h, now_ms, &zoom, &lat, &lon);
+
+	// Track-up turns the map so the ground track points up the screen. The
+	// smoothed track is used, not the raw course, or the map would twitch with
+	// every GPS update.
+	const float rot = th->map_orientation == 1 ? osd_map_view_course(&st->map_view) : 0.0f;
+
+	const float heading_deg = st->heading_deg;
+	const bool home_valid = st->home_valid;
+	const double home_lat = st->home_lat, home_lon = st->home_lon;
 	const osd_map_style_t style = (osd_map_style_t)th->map_style;
 	const float op = th->map_opacity;
 
@@ -521,39 +594,117 @@ static void draw_map(osd_surface_t *s, const osd_theme_t *th, osd_font_t *font,
 	int px = s->clip_x, py = s->clip_y, pw = s->clip_w, ph = s->clip_h;
 	osd_surface_set_clip(s, x0, y0, w, h);
 
-	osd_map_tile_t tiles[64];
+	// Turning the map means the tiles no longer land on axis-aligned rectangles,
+	// so the loop walks *destination* pixels and asks where each one samples
+	// from. Walking source pixels instead would tear the image into gaps as the
+	// rotation stretches them apart. At rot 0 this is the identity and costs
+	// only the arithmetic.
+	//
+	// A turned viewport reaches into the corners of its bounding square, so the
+	// tiles fetched cover the diagonal rather than the rectangle.
+	const int span = rot != 0.0f ? (int)ceilf(sqrtf((float)(w * w + h * h))) : 0;
+	const int fetch_w = rot != 0.0f ? span : w;
+	const int fetch_h = rot != 0.0f ? span : h;
+
+	double centre_wx, centre_wy;
+	osd_map_project(lat, lon, zoom, &centre_wx, &centre_wy);
+
+	// The tile grid covering that extent, resolved once per layer so the
+	// per-pixel loop is arithmetic plus one array index rather than a cache
+	// probe 100k times a frame.
+	const double fetch_left = centre_wx - fetch_w / 2.0;
+	const double fetch_top = centre_wy - fetch_h / 2.0;
+	const int first_tx = (int)floor(fetch_left / OSD_TILE_SIZE);
+	const int first_ty = (int)floor(fetch_top / OSD_TILE_SIZE);
+	const int grid_w = (int)floor((fetch_left + fetch_w - 1) / OSD_TILE_SIZE) - first_tx + 1;
+	const int grid_h = (int)floor((fetch_top + fetch_h - 1) / OSD_TILE_SIZE) - first_ty + 1;
+	const int world_tiles = 1 << zoom;
+
 	int layers = 1 + osd_map_overlay_count(style);
 	int missing = 0;
 
-	for (int layer = 0; layer < layers; layer++) {
-		int n = osd_map_visible_tiles(lat, lon, zoom, w, h, tiles, 64);
-		for (int i = 0; i < n; i++) {
-			const osd_tile_bitmap_t *b =
-				osd_tiles_get(style, layer, zoom, tiles[i].tile_x, tiles[i].tile_y);
-			if (!b) {
-				if (layer == 0)
-					missing++;
-				continue;
+	if (grid_w > 0 && grid_h > 0 && (size_t)(grid_w * grid_h) <= 64) {
+		for (int layer = 0; layer < layers; layer++) {
+			const osd_tile_bitmap_t *grid_tiles[64] = {NULL};
+			for (int gy = 0; gy < grid_h; gy++) {
+				for (int gx = 0; gx < grid_w; gx++) {
+					const int ty = first_ty + gy;
+					if (ty < 0 || ty >= world_tiles)
+						continue; // latitude does not wrap; off-world tiles are absent
+					int tx = (first_tx + gx) % world_tiles;
+					if (tx < 0)
+						tx += world_tiles; // longitude does
+					const osd_tile_bitmap_t *b = osd_tiles_get(style, layer, zoom, tx, ty);
+					grid_tiles[gy * grid_w + gx] = b;
+					if (!b && layer == 0)
+						missing++;
+				}
 			}
-			for (int ty = 0; ty < b->height; ty++) {
-				int dy = y0 + tiles[i].screen_y + ty;
-				for (int tx = 0; tx < b->width; tx++) {
-					int dx = x0 + tiles[i].screen_x + tx;
-					const uint8_t *sp = b->pixels + ((size_t)ty * b->width + tx) * 4;
+
+			for (int dy = 0; dy < h; dy++) {
+				for (int dx = 0; dx < w; dx++) {
+					double wx, wy;
+					osd_map_screen_to_world(centre_wx, centre_wy, w, h, rot, dx + 0.5, dy + 0.5,
+						&wx, &wy);
+
+					const int gx = (int)floor(wx / OSD_TILE_SIZE) - first_tx;
+					const int gy = (int)floor(wy / OSD_TILE_SIZE) - first_ty;
+					if (gx < 0 || gx >= grid_w || gy < 0 || gy >= grid_h)
+						continue;
+					const osd_tile_bitmap_t *b = grid_tiles[gy * grid_w + gx];
+					if (!b)
+						continue;
+
+					int ix = (int)(wx - floor(wx / OSD_TILE_SIZE) * OSD_TILE_SIZE);
+					int iy = (int)(wy - floor(wy / OSD_TILE_SIZE) * OSD_TILE_SIZE);
+					if (ix < 0 || ix >= b->width || iy < 0 || iy >= b->height)
+						continue;
+
+					const uint8_t *sp = b->pixels + ((size_t)iy * b->width + ix) * 4;
 					// Label overlays are largely transparent; respect their alpha
 					// so the imagery shows through.
-					float cov = (sp[3] / 255.0f) * op;
+					const float cov = (sp[3] / 255.0f) * op;
 					if (cov <= 0.004f)
 						continue;
-					osd_blend_px(s, dx, dy, OSD_ARGB(255, sp[2], sp[1], sp[0]), cov);
+					osd_blend_px(s, x0 + dx, y0 + dy, OSD_ARGB(255, sp[2], sp[1], sp[0]), cov);
 				}
 			}
 		}
 	}
 
+	// The scale note goes down before the markers. It sits in the bottom-left
+	// corner, which is exactly where an off-map home arrow is pinned once you
+	// have flown south-west of the launch point - and losing the way back
+	// behind a zoom readout is the wrong trade.
+	if (font) {
+	char note[48];
+	if (missing > 0)
+		snprintf(note, sizeof(note), "z%d  %d tiles...", zoom, missing);
+	else if (th->map_auto_zoom)
+		// The zoom moves on its own now, so show what is moving it.
+		snprintf(note, sizeof(note), "z%d  %dm/s", zoom, (int)(st->map_view.speed_mps + 0.5f));
+	else
+		snprintf(note, sizeof(note), "z%d", zoom);
+	// Same plinth the coordinate tab gets. Over bright imagery - a sandy
+	// track, a field in full sun - small label-coloured text on bare tiles
+	// is unreadable, which is exactly when you want to know the scale.
+	osd_text_metrics_t nm;
+	if (osd_text_measure(font, th->label_size, note, &nm)) {
+		const int padx = 6, pady = 4;
+		int nw = nm.width + (int)(th->label_tracking * (float)strlen(note)) + padx * 2;
+		int nh = nm.height + pady * 2;
+		osd_pointf_t plinth[4] = {{(float)x0, (float)(y1 - nh)},
+			{(float)(x0 + nw), (float)(y1 - nh)},
+			{(float)(x0 + nw + nh * 0.5f), (float)y1}, {(float)x0, (float)y1}};
+		osd_fill_poly(s, plinth, 4, osd_theme_apply_opacity(th->panel_fill, op));
+	}
+	osd_text_draw_tracked(s, font, th->label_size, x0 + 6, y1 - 8, note, th->label_tracking,
+		osd_theme_apply_opacity(th->label, op));
+	}
+
 	if (home_valid) {
 		float hx, hy;
-		osd_map_point_in_view(home_lat, home_lon, lat, lon, zoom, w, h, &hx, &hy);
+		osd_map_point_in_view_rot(home_lat, home_lon, lat, lon, zoom, w, h, rot, &hx, &hy);
 		osd_color_t home_c = osd_theme_apply_opacity(th->good, op);
 		const float inset = 15.0f;
 
@@ -583,9 +734,19 @@ static void draw_map(osd_surface_t *s, const osd_theme_t *th, osd_font_t *font,
 	}
 
 	float ax, ay;
-	osd_map_point_in_view(lat, lon, lat, lon, zoom, w, h, &ax, &ay);
-	draw_aircraft(s, x0 + ax, y0 + ay, 11.0f, heading_deg, osd_theme_apply_opacity(th->accent, op),
+	osd_map_point_in_view_rot(ac_lat, ac_lon, lat, lon, zoom, w, h, rot, &ax, &ay);
+	// The marker turns with the map, so in track-up what is left is the crab
+	// angle: the nose sits off straight-up by however much the wind is pushing.
+	draw_aircraft(s, x0 + ax, y0 + ay, 11.0f, heading_deg - rot, osd_theme_apply_opacity(th->accent, op),
 		osd_theme_apply_opacity(OSD_ARGB(0xC0, 0, 0, 0), op));
+
+	if (rot != 0.0f) {
+		// Below the coordinate tab: the needle's "N" rides beyond its tip and
+		// would otherwise be swallowed by it.
+		draw_north(s, font, (float)(x0 + w - 28), (float)(y0 + 44), 11.0f, rot,
+			osd_theme_apply_opacity(th->warn, op),
+			osd_theme_apply_opacity(OSD_ARGB(0xC0, 0, 0, 0), op));
+	}
 
 	osd_surface_set_clip(s, px, py, pw, ph);
 
@@ -604,7 +765,7 @@ static void draw_map(osd_surface_t *s, const osd_theme_t *th, osd_font_t *font,
 		// Coordinates in a tab at the top-right: the map shows where you are, but
 		// the numbers are still what gets read out over the radio.
 		char coords[40];
-		snprintf(coords, sizeof(coords), "%.5f %.5f", lat, lon);
+		snprintf(coords, sizeof(coords), "%.5f %.5f", ac_lat, ac_lon);
 		osd_text_metrics_t cm;
 		if (osd_text_measure(font, th->label_size, coords, &cm)) {
 			const int padx = 6, pady = 4;
@@ -615,13 +776,6 @@ static void draw_map(osd_surface_t *s, const osd_theme_t *th, osd_font_t *font,
 			osd_fill_poly(s, tab, 4, osd_theme_apply_opacity(th->panel_fill, op));
 			osd_text_draw(s, font, th->label_size, tx + padx, ty + pady + cm.ascent, coords, accent);
 		}
-		char note[48];
-		if (missing > 0)
-			snprintf(note, sizeof(note), "z%d  %d tiles...", zoom, missing);
-		else
-			snprintf(note, sizeof(note), "z%d", zoom);
-		osd_text_draw_tracked(s, font, th->label_size, x0 + 8, y1 - 8, note, th->label_tracking,
-			osd_theme_apply_opacity(th->label, op));
 	}
 }
 
@@ -668,7 +822,11 @@ int osd_widgets_draw_all(osd_surface_t *s, const osd_theme_t *th, osd_font_t *fo
 		if ((float)(now_ms - st->last_seen_ms[ty]) > th->element_hold_ms)
 			continue;
 		const osd_element_t *e = &st->last[ty];
-		bool textual = (e->type == OSD_ELEM_FLIGHT_TIME || e->type == OSD_ELEM_FLIGHT_MODE);
+		// Elements whose content is words, not a number, so `value_valid` says
+		// nothing about whether there is anything to draw. Leaving messages out
+		// of this list recognised every failsafe and then dropped it silently.
+		bool textual = (e->type == OSD_ELEM_FLIGHT_TIME || e->type == OSD_ELEM_FLIGHT_MODE ||
+						e->type == OSD_ELEM_WARNING);
 		if ((!e->value_valid && !textual) || !osd_theme_element_enabled(th, e->type))
 			continue;
 		if (osd_theme_element_opacity(th, e->type) <= 0.01f)
@@ -684,10 +842,16 @@ int osd_widgets_draw_all(osd_surface_t *s, const osd_theme_t *th, osd_font_t *fo
 			else if (list[i].type == OSD_ELEM_LONGITUDE && list[i].value_valid)
 				lo = &list[i];
 		}
+		// Only claim the map when its rectangle really works out. draw_map used
+		// to bail on a bad rectangle *after* the caller had already marked the
+		// coordinates as handled, which dropped them off the screen entirely.
 		if (la && lo) {
-			map_lat_v = *la;
-			map_lon_v = *lo;
-			have_map = true;
+			int mx, my, mw, mh;
+			if (map_rect(th, la, lo, grid, &mx, &my, &mw, &mh)) {
+				map_lat_v = *la;
+				map_lon_v = *lo;
+				have_map = true;
+			}
 		}
 	}
 
@@ -732,8 +896,7 @@ int osd_widgets_draw_all(osd_surface_t *s, const osd_theme_t *th, osd_font_t *fo
 			st->home_lon = map_lon_v.value;
 			st->home_valid = true;
 		}
-		draw_map(s, th, font, &map_lat_v, &map_lon_v, grid, st->heading_deg, st->home_valid,
-			st->home_lat, st->home_lon);
+		draw_map(s, th, font, &map_lat_v, &map_lon_v, grid, st, now_ms);
 		map_drawn = true;
 	}
 
@@ -743,7 +906,10 @@ int osd_widgets_draw_all(osd_surface_t *s, const osd_theme_t *th, osd_font_t *fo
 	for (int i = 0; i < n; i++) {
 		sig = (sig ^ (uint32_t)list[i].type) * 16777619u;
 		sig = (sig ^ (uint32_t)list[i].row) * 16777619u;
-		sig = (sig ^ (uint32_t)list[i].col) * 16777619u;
+		// The element's *anchor*, not its leftmost cell: a value gaining a digit
+		// slides `col` one cell left, which would otherwise relayout everything
+		// on screen every time a reading crossed 99 -> 100.
+		sig = (sig ^ (uint32_t)list[i].anchor_col) * 16777619u;
 	}
 	bool relayout = (sig != st->layout_signature);
 	if (relayout) {
@@ -777,12 +943,18 @@ int osd_widgets_draw_all(osd_surface_t *s, const osd_theme_t *th, osd_font_t *fo
 		float opacity = osd_theme_element_opacity(th, e->type);
 		float scale = osd_theme_element_scale(th, e->type);
 
-		int cx, cy, cw, ch;
-		cell_rect(grid, e->col, e->row, e->width, &cx, &cy, &cw, &ch);
-		float px = (float)cx;
-		float py = (float)cy;
 		float w, h;
 		measure_panel(th, font, e, st->current_peak, st->cell_count, scale, &w, &h);
+
+		// Place against the anchor cell, the one the flight controller holds
+		// still, rather than against the run's leftmost glyph. Readings are
+		// right-aligned in their field, so a trailing-symbol value grows
+		// leftwards: anchoring on the left edge walked the whole panel one cell
+		// left at 99 -> 100 and again at 999 -> 1000.
+		int ax, ay, aw, ah;
+		cell_rect(grid, e->anchor_col, e->row, 1, &ax, &ay, &aw, &ah);
+		float px = e->anchor_right ? (float)(ax + aw) - w : (float)ax;
+		float py = (float)ay;
 
 		if (!relayout && st->layout[e->type].valid) {
 			// Reuse the settled position. Width may only grow - a longer reading
@@ -790,16 +962,42 @@ int osd_widgets_draw_all(osd_surface_t *s, const osd_theme_t *th, osd_font_t *fo
 			// as digits come and go.
 			px = st->layout[e->type].x;
 			py = st->layout[e->type].y;
-			if (w < st->layout[e->type].w)
-				w = st->layout[e->type].w;
-			else
-				st->layout[e->type].w = w;
 			h = st->layout[e->type].h;
+			if (w <= st->layout[e->type].w) {
+				w = st->layout[e->type].w;
+			} else {
+				// A right-anchored panel grows leftwards, so the value stays put
+				// instead of the panel edge dragging it sideways.
+				if (e->anchor_right) {
+					px -= w - st->layout[e->type].w;
+					if (px < 0.0f)
+						px = 0.0f;
+					st->layout[e->type].x = px;
+				}
+				st->layout[e->type].w = w;
+			}
 
 			draw_one(s, th, font, e, st->current_peak, st->cell_count, px, py, opacity, scale);
 			drawn++;
 			continue;
 		}
+
+		// Keep the panel on screen. An element in column 0 or on the last row
+		// would otherwise put half its widget outside the viewport - the grid
+		// position is where the *value* was, not where a whole panel fits.
+		//
+		// This has to happen *before* collision resolution, not after. An
+		// element in one of the last columns has its panel pulled left to fit,
+		// and pulling it left after the overlap test has passed drops it
+		// straight on top of a panel already placed on that row.
+		if (px + w > (float)s->width)
+			px = (float)s->width - w;
+		if (px < 0.0f)
+			px = 0.0f;
+		if (py + h > (float)s->height)
+			py = (float)s->height - h;
+		if (py < 0.0f)
+			py = 0.0f;
 
 		for (int attempt = 0; attempt < OSD_ELEM_TYPE_COUNT; attempt++) {
 			bool clash = false;
@@ -814,13 +1012,8 @@ int osd_widgets_draw_all(osd_surface_t *s, const osd_theme_t *th, osd_font_t *fo
 			if (!clash)
 				break;
 		}
-		// Keep the panel on screen. An element in column 0 or on the last row
-		// would otherwise put half its widget outside the viewport - the grid
-		// position is where the *value* was, not where a whole panel fits.
-		if (px + w > (float)s->width)
-			px = (float)s->width - w;
-		if (px < 0.0f)
-			px = 0.0f;
+		// A crowded screen can push the last panel off the bottom. Keeping it
+		// visible matters more than the overlap it may land back on.
 		if (py + h > (float)s->height)
 			py = (float)s->height - h;
 		if (py < 0.0f)
@@ -837,7 +1030,7 @@ int osd_widgets_draw_all(osd_surface_t *s, const osd_theme_t *th, osd_font_t *fo
 
 		st->layout[e->type].valid = true;
 		st->layout[e->type].row = e->row;
-		st->layout[e->type].col = e->col;
+		st->layout[e->type].col = e->anchor_col;
 		st->layout[e->type].x = px;
 		st->layout[e->type].y = py;
 		st->layout[e->type].w = w;

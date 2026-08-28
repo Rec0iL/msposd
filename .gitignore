@@ -18,4 +18,8 @@ msposd_rockchip
 version.h
 serial_monitor.c
 *.ini
+# ...but the shipped widget themes are source, not machine-local config. The
+# rule above is there for things like vtxmenu.ini; without this exception a
+# fresh clone has no theme at all and the widget tests fail.
+!themes/*/theme.ini
 

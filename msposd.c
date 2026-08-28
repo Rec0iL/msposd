@@ -36,6 +36,7 @@
 //#include "msp/msp.cpp"
 
 #define MAX_MTU 9000
+#include "osd.h"
 #include "osd/util/settings.h"
 
 // This needs to be patched in the kernel to work
@@ -112,6 +113,7 @@ static void print_usage() {
 		"	-M --mavlink     Use mavlink protocol\n"
 		"	   --mspvtx      Enable mspvtx support\n"
 		"      --subtitle <path>  Enable OSD/SRT recording\n"
+		"      --theme <path>     Widget theme ini to read, and re-read when it changes\n"
 		"	-v --verbose     Show debug info\n"
 		"	-h --help        Display this help\n",
 			default_master, default_baudrate, default_out_addr);
@@ -1474,6 +1476,7 @@ int main(int argc, char **argv) {
 		{"size", required_argument, NULL, 'z'},
 		{"mspvtx", no_argument, NULL, '1'},
 		{"subtitle", required_argument, NULL, 's'},
+		{"theme", required_argument, NULL, 'T'},
 		{"mavlink", required_argument, NULL, 'M'},
 		{"verbose", no_argument, NULL, 'v'},
 		{"help", no_argument, NULL, 'h'},
@@ -1595,6 +1598,11 @@ int main(int argc, char **argv) {
 
 		case 's':
 		    recording_dir = strdup(optarg);
+			break;
+
+		case 'T':
+			osd_set_theme_path(optarg);
+			printf("OSD theme: %s\n", optarg);
 			break;
 
 		case 'v':

@@ -393,6 +393,11 @@ int osd_elements_scan(osd_glyph_getter get,
 
 			e->col = (uint8_t)first_col;
 			e->width = (uint8_t)(last_col - first_col + 1);
+			// The symbol is where the flight controller pinned the field; the
+			// digits grow away from it. Record which end that is so a widget can
+			// be placed against the edge that does not move.
+			e->anchor_right = !anchor->anchor_leads;
+			e->anchor_col = (uint8_t)(anchor->anchor_leads ? first_col : last_col);
 			snprintf(e->text, sizeof(e->text), "%s", text);
 
 			if (anchor->kind == VAL_TIME) {
@@ -460,6 +465,7 @@ int osd_elements_scan(osd_glyph_getter get,
 			e->row = (uint8_t)row;
 			e->col = (uint8_t)first;
 			e->width = (uint8_t)(last - first + 1);
+			e->anchor_col = (uint8_t)first; // text grows rightwards from its start
 			e->severity = kMessages[i].severity;
 			e->value_valid = false;
 			snprintf(e->text, sizeof(e->text), "%s", trimmed);
@@ -506,6 +512,7 @@ int osd_elements_scan(osd_glyph_getter get,
 				e->row = (uint8_t)row;
 				e->col = (uint8_t)start;
 				e->width = (uint8_t)wl;
+				e->anchor_col = (uint8_t)start;
 				e->value_valid = false;
 				snprintf(e->text, sizeof(e->text), "%s", word);
 				break;

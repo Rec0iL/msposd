@@ -65,6 +65,15 @@ void osd_theme_defaults(osd_theme_t *t) {
 
 	t->map_max_w = 420;
 	t->map_max_h = 300;
+	t->map_orientation = 0; // north up
+	t->map_auto_zoom = true;
+	t->map_zoom_min = 13;
+	t->map_zoom_max = 17;
+	t->map_lookahead_s = 20.0f;
+	t->map_lead_s = 6.0f;
+	t->map_lead_max = 0.35f;
+	t->map_zoom_settle_ms = 3000.0f;
+	t->map_smooth_ms = 1500.0f;
 	snprintf(t->map_cache_dir, sizeof(t->map_cache_dir), "%s", "/tmp/msposd-tiles");
 
 	for (int i = 0; i < OSD_ELEM_TYPE_COUNT; i++) {
@@ -325,6 +334,28 @@ static void apply_kv(osd_theme_t *t, const char *section, const char *key, const
 			t->map_max_h = (int)clampf(f, 60.0f, 2160.0f);
 		else if (!strcasecmp(key, "cache_dir"))
 			snprintf(t->map_cache_dir, sizeof(t->map_cache_dir), "%s", val);
+		else if (!strcasecmp(key, "orientation")) {
+			if (!strcasecmp(val, "north"))
+				t->map_orientation = 0;
+			else if (!strcasecmp(val, "track") || !strcasecmp(val, "heading") ||
+					 !strcasecmp(val, "course"))
+				t->map_orientation = 1;
+		} else if (!strcasecmp(key, "auto_zoom") && parse_bool(val, &b))
+			t->map_auto_zoom = b;
+		else if (!strcasecmp(key, "zoom_min") && parse_float(val, &f))
+			t->map_zoom_min = (int)clampf(f, 1.0f, 19.0f);
+		else if (!strcasecmp(key, "zoom_max") && parse_float(val, &f))
+			t->map_zoom_max = (int)clampf(f, 1.0f, 19.0f);
+		else if (!strcasecmp(key, "lookahead") && parse_float(val, &f))
+			t->map_lookahead_s = clampf(f, 1.0f, 120.0f);
+		else if (!strcasecmp(key, "lead") && parse_float(val, &f))
+			t->map_lead_s = clampf(f, 0.0f, 60.0f);
+		else if (!strcasecmp(key, "lead_max") && parse_float(val, &f))
+			t->map_lead_max = clampf(f, 0.0f, 0.9f);
+		else if (!strcasecmp(key, "zoom_settle_ms") && parse_float(val, &f))
+			t->map_zoom_settle_ms = clampf(f, 0.0f, 30000.0f);
+		else if (!strcasecmp(key, "smooth_ms") && parse_float(val, &f))
+			t->map_smooth_ms = clampf(f, 0.0f, 10000.0f);
 		return;
 	}
 

@@ -7,6 +7,7 @@
 #pragma once
 
 #include "../elements/osd_elements.h"
+#include "osd_map.h"
 #include "osd_paint.h"
 #include "osd_text.h"
 #include "osd_theme.h"
@@ -17,6 +18,12 @@ typedef struct {
 	// without the user configuring anything. 0 until a battery is seen.
 	int cell_count;
 	float heading_deg; // aircraft heading, for the map marker
+	// Ground track, from MSP_RAW_GPS. The map zooms out with speed and leads
+	// along the course, so what is ahead of the aircraft gets the screen.
+	// Course rather than heading: in wind the nose and the track differ.
+	float ground_speed_mps;
+	float course_deg;
+	osd_map_view_t map_view; // smoothed zoom and view centre
 	// Launch point, captured at arming like the flight controller does.
 	bool home_valid;
 	double home_lat, home_lon;
