@@ -70,3 +70,28 @@ interpolated trig and was wrong by two tiles while the code was correct.
 Watch the tile URL ordering: OpenStreetMap serves `{z}/{x}/{y}`, Esri serves
 `{z}/{row}/{col}` i.e. y before x. Swapping them returns valid-looking imagery
 of the wrong place, which is not obvious on screen.
+
+## Map tiles
+
+`osd_tiles.c` keeps a memory LRU plus a disk cache and fetches misses on a
+background thread. Every lookup returns immediately - a missing tile draws a gap
+for a moment, whereas blocking the render loop on the network would make the OSD
+unusable.
+
+```sh
+gcc -I. -I osd/widgets -D_GNU_SOURCE -DOSD_MAP_HTTP -DOSD_MAP_JPEG -o tiletest \
+    osd/widgets/tiletest.c osd/widgets/osd_tiles.c osd/widgets/osd_map.c \
+    osd/widgets/osd_paint.c libpng/lodepng.c -lm -lcurl -lpthread -ljpeg
+./tiletest roads     # writes map-roads.png
+./tiletest sat       # writes map-sat.png
+```
+
+Two things to know:
+
+- **Tile servers do not all serve PNG.** OpenStreetMap does; Esri's World
+  Imagery serves JPEG. The format is decided by sniffing magic bytes, not by the
+  URL or the Content-Type header. Without JPEG support satellite tiles download
+  fine and then fail to decode, which looks like a network problem but is not.
+- **OpenStreetMap's tile usage policy** requires an identifying User-Agent and
+  forbids bulk downloading, hence the UA string and the aggressive caching.
+  Esri's World Imagery has its own terms. Check both before relying on either.

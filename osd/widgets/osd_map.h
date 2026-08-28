@@ -33,7 +33,8 @@ void osd_map_unproject(double world_x, double world_y, int zoom, double *lat, do
 bool osd_map_tile_url(osd_map_style_t style, int layer, int zoom, int tile_x, int tile_y,
 	char *out, size_t out_size);
 
-/// Cache-friendly filename for a tile, e.g. "sat_16_35252_21503.png".
+/// Cache filename for a tile. No extension: the bytes are stored verbatim and
+/// may be PNG (OpenStreetMap) or JPEG (Esri imagery).
 bool osd_map_tile_key(osd_map_style_t style, int layer, int zoom, int tile_x, int tile_y,
 	char *out, size_t out_size);
 

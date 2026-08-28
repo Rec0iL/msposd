@@ -92,7 +92,9 @@ bool osd_map_tile_key(osd_map_style_t style, int layer, int zoom, int tile_x, in
 	const char *prefix = (style == OSD_MAP_ROADS) ? "osm"
 					   : (layer == 1)             ? "lbl"
 													: "sat";
-	snprintf(out, out_size, "%s_%d_%d_%d.png", prefix, zoom, tile_x, tile_y);
+	// No extension: the cached bytes are stored verbatim and may be PNG (OSM) or
+	// JPEG (Esri imagery), so claiming ".png" would be misleading.
+	snprintf(out, out_size, "%s_%d_%d_%d.tile", prefix, zoom, tile_x, tile_y);
 	return true;
 }
 

@@ -3,7 +3,7 @@ VERSION_STRING := $(shell date +"%Y%m%d_%H%M%S")
 CFLAGS ?=
 CFLAGS += -Wno-address-of-packed-member -DVERSION_STRING="\"$(VERSION_STRING)\""
 
-SRCS := compat.c msposd.c bmp/bitmap.c bmp/region.c bmp/lib/schrift.c bmp/text.c osd/net/network.c osd/msp/msp.c osd/msp/msp_displayport.c libpng/lodepng.c osd/util/interface.c osd/util/settings.c osd/util/ini_parser.c osd/msp/vtxmenu.c osd/util/subtitle.c osd/util/simple_ini.c osd/elements/osd_elements.c osd/widgets/osd_paint.c osd/widgets/osd_text.c osd/widgets/osd_theme.c osd/widgets/osd_widgets.c osd/widgets/osd_map.c
+SRCS := compat.c msposd.c bmp/bitmap.c bmp/region.c bmp/lib/schrift.c bmp/text.c osd/net/network.c osd/msp/msp.c osd/msp/msp_displayport.c libpng/lodepng.c osd/util/interface.c osd/util/settings.c osd/util/ini_parser.c osd/msp/vtxmenu.c osd/util/subtitle.c osd/util/simple_ini.c osd/elements/osd_elements.c osd/widgets/osd_paint.c osd/widgets/osd_text.c osd/widgets/osd_theme.c osd/widgets/osd_widgets.c osd/widgets/osd_map.c osd/widgets/osd_tiles.c
 OUTPUT ?= $(PWD)
 BUILD = $(CC) $(SRCS) -I $(SDK)/include -I$(TOOLCHAIN)/usr/include -I$(PWD) -L$(DRV) $(CFLAGS) $(LIB) -levent_core -Os -s $(CFLAGS) -o $(OUTPUT)
 
@@ -59,8 +59,8 @@ star6e: version.h
 
 native: version.h
 	$(eval SDK = ./sdk/gk7205v300)
-	$(eval CFLAGS += -D_x86)
-	$(eval LIB = -lcsfml-graphics -lcsfml-window -lcsfml-system `pkg-config --libs cairo x11 xext` -lXext -lm)
+	$(eval CFLAGS += -D_x86 -DOSD_MAP_HTTP -DOSD_MAP_JPEG)
+	$(eval LIB = -lcsfml-graphics -lcsfml-window -lcsfml-system `pkg-config --libs cairo x11 xext` -lXext -lm -lcurl -lpthread -ljpeg)
 	$(eval BUILD = $(CC) $(SRCS) -I $(SDK)/include -L $(DRV) $(CFLAGS) $(LIB) -levent_core -O0 -g -o $(OUTPUT))
 	$(BUILD)
 
