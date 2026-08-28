@@ -37,3 +37,21 @@ gcc -Wall -D_GNU_SOURCE -o test_theme osd/widgets/test_theme.c osd/widgets/osd_t
 Covers the parts that matter operationally: a malformed theme must keep its
 defaults rather than disable the OSD, values are clamped, and `mode = classic`
 turns every widget off in one key.
+
+## End-to-end check
+
+`preview_live.c` builds a glyph grid exactly as a flight controller would send
+it, runs the real recogniser over it, and draws the result with the real widget
+renderer - so it exercises recognition, theme, text and painting together.
+
+```sh
+gcc -I. -I bmp/lib -D_GNU_SOURCE -o preview_live osd/widgets/preview_live.c \
+    osd/elements/osd_elements.c osd/widgets/osd_paint.c osd/widgets/osd_text.c \
+    osd/widgets/osd_theme.c osd/widgets/osd_widgets.c bmp/lib/schrift.c \
+    libpng/lodepng.c -lm
+./preview_live   # writes widget-live.png
+```
+
+It composites the overlay over a stand-in video frame, which is what the
+hardware does. Without that step the transparent cut-outs look like white
+blocks rather than the scene showing through.
