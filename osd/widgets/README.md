@@ -55,3 +55,18 @@ gcc -I. -I bmp/lib -D_GNU_SOURCE -o preview_live osd/widgets/preview_live.c \
 It composites the overlay over a stand-in video frame, which is what the
 hardware does. Without that step the transparent cut-outs look like white
 blocks rather than the scene showing through.
+
+## Map tile tests
+
+```sh
+gcc -Wall -o test_map osd/widgets/test_map.c osd/widgets/osd_map.c -I osd/widgets -lm
+./test_map
+```
+
+Expected tile numbers come from the canonical slippy-map formula, not from hand
+arithmetic - an earlier version of this test asserted values computed with
+interpolated trig and was wrong by two tiles while the code was correct.
+
+Watch the tile URL ordering: OpenStreetMap serves `{z}/{x}/{y}`, Esri serves
+`{z}/{row}/{col}` i.e. y before x. Swapping them returns valid-looking imagery
+of the wrong place, which is not obvious on screen.

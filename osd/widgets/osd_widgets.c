@@ -493,6 +493,21 @@ int osd_widgets_draw_all(osd_surface_t *s, const osd_theme_t *th, osd_font_t *fo
 		osd_clear_rect(s, cx, cy, cw, ch);
 	}
 
+	// Signature of what is on screen and where. Only a change here justifies
+	// moving anything.
+	uint32_t sig = 2166136261u;
+	for (int i = 0; i < n; i++) {
+		sig = (sig ^ (uint32_t)list[i].type) * 16777619u;
+		sig = (sig ^ (uint32_t)list[i].row) * 16777619u;
+		sig = (sig ^ (uint32_t)list[i].col) * 16777619u;
+	}
+	bool relayout = (sig != st->layout_signature);
+	if (relayout) {
+		st->layout_signature = sig;
+		for (int i = 0; i < OSD_ELEM_TYPE_COUNT; i++)
+			st->layout[i].valid = false;
+	}
+
 	float placed_x[OSD_ELEM_TYPE_COUNT], placed_y[OSD_ELEM_TYPE_COUNT];
 	float placed_w[OSD_ELEM_TYPE_COUNT], placed_h[OSD_ELEM_TYPE_COUNT];
 	int placed = 0;
@@ -509,6 +524,23 @@ int osd_widgets_draw_all(osd_surface_t *s, const osd_theme_t *th, osd_font_t *fo
 		float py = (float)cy;
 		float w, h;
 		measure_panel(th, font, e, st->current_peak, st->cell_count, scale, &w, &h);
+
+		if (!relayout && st->layout[e->type].valid) {
+			// Reuse the settled position. Width may only grow - a longer reading
+			// must still fit - and never shrinks, so the panel does not breathe
+			// as digits come and go.
+			px = st->layout[e->type].x;
+			py = st->layout[e->type].y;
+			if (w < st->layout[e->type].w)
+				w = st->layout[e->type].w;
+			else
+				st->layout[e->type].w = w;
+			h = st->layout[e->type].h;
+
+			draw_one(s, th, font, e, st->current_peak, st->cell_count, px, py, opacity, scale);
+			drawn++;
+			continue;
+		}
 
 		for (int attempt = 0; attempt < OSD_ELEM_TYPE_COUNT; attempt++) {
 			bool clash = false;
@@ -543,6 +575,14 @@ int osd_widgets_draw_all(osd_surface_t *s, const osd_theme_t *th, osd_font_t *fo
 		placed_h[placed] = h;
 		placed++;
 		drawn++;
+
+		st->layout[e->type].valid = true;
+		st->layout[e->type].row = e->row;
+		st->layout[e->type].col = e->col;
+		st->layout[e->type].x = px;
+		st->layout[e->type].y = py;
+		st->layout[e->type].w = w;
+		st->layout[e->type].h = h;
 	}
 	return drawn;
 }

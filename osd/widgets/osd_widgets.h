@@ -25,6 +25,19 @@ typedef struct {
 	// through underneath. Hold duration comes from the theme.
 	osd_element_t last[OSD_ELEM_TYPE_COUNT];
 	uint64_t last_seen_ms[OSD_ELEM_TYPE_COUNT];
+
+	// Resolved layout, held still once decided. Collision resolution depends on
+	// panel widths, and widths follow the value text, so re-running it every
+	// frame made panels shuffle as readings changed - "137" is wider than "70".
+	// The flight controller's layout does not move in flight, so neither should
+	// ours: positions are recomputed only when the set of elements or their grid
+	// positions actually changes.
+	struct {
+		bool valid;
+		uint8_t row, col;
+		float x, y, w, h;
+	} layout[OSD_ELEM_TYPE_COUNT];
+	uint32_t layout_signature;
 } osd_widget_state_t;
 
 void osd_widgets_state_init(osd_widget_state_t *st);
