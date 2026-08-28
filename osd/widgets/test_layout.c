@@ -276,7 +276,11 @@ int main(void) {
 		} cases[] = {
 			{"same row", 6, 1, 6, 20, false},
 			{"stacked in one column", 6, 1, 8, 1, false},
-			{"columns overlapping", 6, 1, 9, 3, false},
+			// Overlapping columns are how a *narrow* map is asked for: the two
+			// readouts are 10 cells wide, so requiring them fully side by side
+			// would put a 20-cell floor under the map's width. Only an exact
+			// column match reads as a list.
+			{"columns overlapping, offset", 6, 1, 9, 3, true},
 			{"diagonal, far apart", 4, 1, 12, 20, true},
 		};
 		for (size_t c = 0; c < sizeof(cases) / sizeof(cases[0]); c++) {

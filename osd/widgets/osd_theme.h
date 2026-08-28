@@ -62,9 +62,10 @@ typedef struct {
 	// Speed-driven view. A fixed zoom is wrong at both ends of the speed range:
 	// hovering it shows a patch you could walk across, and at 30 m/s it shows
 	// where you have been. See osd_map_view_cfg_t for what each knob does.
-	// 0 = north is up, 1 = the ground track is up and the map turns under the
-	// aircraft. Track-up costs you a fixed frame of reference, so the compass
-	// rose is drawn whenever it is on.
+	// 0 = north is up; 1 = the ground track is up; 2 = the heading is up, which
+	// is what agrees with a nose-mounted camera - in wind the two differ. Either
+	// turning mode costs a fixed frame of reference, so the compass needle is
+	// drawn whenever one is on.
 	int map_orientation;
 	bool map_auto_zoom;
 	int map_zoom_min, map_zoom_max;

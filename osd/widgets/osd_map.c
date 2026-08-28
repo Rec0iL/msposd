@@ -227,8 +227,8 @@ static float ease_alpha(float dt_ms, float tau_ms) {
 }
 
 void osd_map_view_update(osd_map_view_t *v, const osd_map_view_cfg_t *cfg, double lat, double lon,
-	float speed_mps, float course_deg, int w, int h, uint64_t now_ms, int *out_zoom,
-	double *out_lat, double *out_lon) {
+	float speed_mps, float course_deg, float heading_deg, int w, int h, uint64_t now_ms,
+	int *out_zoom, double *out_lat, double *out_lon) {
 	if (!v || !cfg)
 		return;
 
@@ -318,6 +318,28 @@ void osd_map_view_update(osd_map_view_t *v, const osd_map_view_cfg_t *cfg, doubl
 			v->dir_n += (tn - v->dir_n) * a;
 		}
 	}
+
+	// Heading has no speed gate: the nose points somewhere even at a standstill.
+	// Eased as a vector for the same reason as the track - so passing through
+	// north takes the short way round - but on a much shorter constant.
+	//
+	// The track is smoothed hard because a GPS course is noisy and only wanted
+	// as a trend. Heading comes from the attitude estimate at high rate and is
+	// already smooth, and a heading-up map has to *stay* locked: at the
+	// track's 1.5s the map lags most of a turn behind the nose, which is
+	// exactly the "not locking properly" you see on a roll-in.
+	{
+		const float a_hdg = ease_alpha(dt_ms, 200.0f);
+		const double hdg = (double)heading_deg * M_PI / 180.0;
+		const double he = sin(hdg), hn = cos(hdg);
+		if (v->hdg_e == 0.0 && v->hdg_n == 0.0) {
+			v->hdg_e = he;
+			v->hdg_n = hn;
+		} else {
+			v->hdg_e += (he - v->hdg_e) * a_hdg;
+			v->hdg_n += (hn - v->hdg_n) * a_hdg;
+		}
+	}
 	// Eased as a vector rather than as a bearing and a length: a track crossing
 	// north would otherwise sweep the view the long way round through south.
 	const double target_e = lead_m * sin(crs);
@@ -341,6 +363,15 @@ float osd_map_view_course(const osd_map_view_t *v) {
 	if (!v || (v->dir_e == 0.0 && v->dir_n == 0.0))
 		return 0.0f;
 	float deg = (float)(atan2(v->dir_e, v->dir_n) * 180.0 / M_PI);
+	if (deg < 0.0f)
+		deg += 360.0f;
+	return deg;
+}
+
+float osd_map_view_heading(const osd_map_view_t *v) {
+	if (!v || (v->hdg_e == 0.0 && v->hdg_n == 0.0))
+		return 0.0f;
+	float deg = (float)(atan2(v->hdg_e, v->hdg_n) * 180.0 / M_PI);
 	if (deg < 0.0f)
 		deg += 360.0f;
 	return deg;

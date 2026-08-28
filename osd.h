@@ -13,3 +13,7 @@ void osd_set_theme_path(const char *path);
 /// compositing onto recorded video. `path` is normally a fifo with an encoder
 /// on the other end - the frames are uncompressed and large.
 void osd_record_overlay(const char *path, int fps);
+
+/// Called by the render loop once a frame is fully composed, so the recorder
+/// never captures one mid-compose.
+void osd_record_publish_frame(void);

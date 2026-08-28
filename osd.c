@@ -1111,17 +1111,63 @@ static int osd_record_fps = 30;
 static pthread_t osd_record_thread;
 static bool osd_record_running = false;
 
+// The recorder samples on its own clock, and the render loop composes a frame
+// in place: clear, glyphs, widgets, present. Reading bmpBuff directly catches
+// perhaps half the frames mid-compose - the OSD looks steady on screen while
+// the recording flickers. So the render loop publishes a finished frame here
+// and the recorder only ever writes that.
+static uint8_t *osd_record_shadow = NULL;
+static size_t osd_record_shadow_size = 0;
+static bool osd_record_shadow_ready = false;
+static pthread_mutex_t osd_record_lock = PTHREAD_MUTEX_INITIALIZER;
+
+void osd_record_publish_frame(void) {
+	if (!osd_record_running || !bmpBuff.pData || PIXEL_FORMAT_DEFAULT != PIXEL_FORMAT_8888)
+		return;
+	const size_t n = (size_t)bmpBuff.u32Width * bmpBuff.u32Height * 4;
+
+	pthread_mutex_lock(&osd_record_lock);
+	if (osd_record_shadow_size != n) {
+		free(osd_record_shadow);
+		osd_record_shadow = malloc(n);
+		osd_record_shadow_size = osd_record_shadow ? n : 0;
+	}
+	if (osd_record_shadow) {
+		memcpy(osd_record_shadow, bmpBuff.pData, n);
+		osd_record_shadow_ready = true;
+	}
+	pthread_mutex_unlock(&osd_record_lock);
+}
+
 static void *osd_record_loop(void *arg) {
 	(void)arg;
 	const long period_ns = 1000000000L / (osd_record_fps > 0 ? osd_record_fps : 30);
 	bool announced = false;
+	uint8_t *frame = NULL;
+	size_t frame_size = 0;
 
 	while (osd_record_running) {
 		struct timespec t0;
 		clock_gettime(CLOCK_MONOTONIC, &t0);
 
-		if (bmpBuff.pData && bmpBuff.u32Width && bmpBuff.u32Height &&
-			PIXEL_FORMAT_DEFAULT == PIXEL_FORMAT_8888) {
+		// Take a private copy of the last published frame, so the write - which
+		// can block on a pipe - never holds the render loop up.
+		size_t n = 0;
+		pthread_mutex_lock(&osd_record_lock);
+		if (osd_record_shadow_ready && osd_record_shadow) {
+			if (frame_size != osd_record_shadow_size) {
+				free(frame);
+				frame = malloc(osd_record_shadow_size);
+				frame_size = frame ? osd_record_shadow_size : 0;
+			}
+			if (frame) {
+				memcpy(frame, osd_record_shadow, osd_record_shadow_size);
+				n = osd_record_shadow_size;
+			}
+		}
+		pthread_mutex_unlock(&osd_record_lock);
+
+		if (n) {
 			if (!announced) {
 				announced = true;
 				// The consumer needs the geometry to decode the stream.
@@ -1129,8 +1175,7 @@ static void *osd_record_loop(void *arg) {
 					bmpBuff.u32Height, osd_record_fps);
 				fflush(stdout);
 			}
-			const size_t n = (size_t)bmpBuff.u32Width * bmpBuff.u32Height * 4;
-			const uint8_t *p = (const uint8_t *)bmpBuff.pData;
+			const uint8_t *p = frame;
 			size_t off = 0;
 			while (off < n) {
 				ssize_t w = write(osd_record_fd, p + off, n - off);
@@ -1156,6 +1201,7 @@ static void *osd_record_loop(void *arg) {
 		}
 	}
 
+	free(frame);
 	if (osd_record_fd >= 0) {
 		close(osd_record_fd);
 		osd_record_fd = -1;
@@ -2797,6 +2843,8 @@ static void draw_screenBMP2(bool OnlyAHI) {
 	if (DrawOSD) {
 		// ClearScreen();
 		Render(bmp_x86, bmpBuff.u32Width, bmpBuff.u32Height);
+		// The frame is complete here; hand a copy to the recorder if one is running.
+		osd_record_publish_frame();
 
 		if (AHI_Enabled == 2)
 			draw_AHI();

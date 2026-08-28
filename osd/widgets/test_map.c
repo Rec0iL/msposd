@@ -105,8 +105,8 @@ int main(void) {
     // state rather than on wherever the easing happened to be at frame one.
     #define SETTLE(v, sp, crs, secs) do { \
         for (int _i = 0; _i < (secs) * 10; _i++) { \
-            osd_map_view_update(&(v), &cfg, LAT, LON, (sp), (crs), MW, MH, \
-                                1000 + (uint64_t)_i * 100, &vz, &vlat, &vlon); \
+            osd_map_view_update(&(v), &cfg, LAT, LON, (sp), (crs), (crs), MW, MH, \
+                                1000 + (uint64_t)_i * 100, &vz, &vlat, &vlon);; \
         } \
     } while (0)
 
@@ -183,12 +183,12 @@ int main(void) {
         int before = vz;
         uint64_t t = 100000;
         for (int i = 0; i < 10; i++) // 1s of high speed, settle is 3s
-            osd_map_view_update(&view, &cfg, LAT, LON, 30.0f, 0.0f, MW, MH,
-                                t + (uint64_t)i * 100, &vz, &vlat, &vlon);
+            osd_map_view_update(&view, &cfg, LAT, LON, 30.0f, 0.0f, 0.0f, MW, MH,
+                                t + (uint64_t)i * 100, &vz, &vlat, &vlon);;
         ck("a one-second gust does not change zoom", vz == before);
         for (int i = 10; i < 100; i++)
-            osd_map_view_update(&view, &cfg, LAT, LON, 30.0f, 0.0f, MW, MH,
-                                t + (uint64_t)i * 100, &vz, &vlat, &vlon);
+            osd_map_view_update(&view, &cfg, LAT, LON, 30.0f, 0.0f, 0.0f, MW, MH,
+                                t + (uint64_t)i * 100, &vz, &vlat, &vlon);;
         ck("sustained speed does change it", vz < before);
     }
 
@@ -200,8 +200,8 @@ int main(void) {
         bool went_south = false;
         uint64_t t = 200000;
         for (int i = 0; i < 100; i++) {
-            osd_map_view_update(&view, &cfg, LAT, LON, 25.0f, 10.0f, MW, MH,
-                                t + (uint64_t)i * 100, &vz, &vlat, &vlon);
+            osd_map_view_update(&view, &cfg, LAT, LON, 25.0f, 10.0f, 10.0f, MW, MH,
+                                t + (uint64_t)i * 100, &vz, &vlat, &vlon);;
             if (vlat < LAT) went_south = true;
         }
         ck("350 -> 010 never swings the view south", !went_south);
@@ -212,8 +212,8 @@ int main(void) {
     SETTLE(view, 0.0f, 0.0f, 10);
     {
         double before_lat = vlat, before_lon = vlon;
-        osd_map_view_update(&view, &cfg, LAT, LON, 30.0f, 90.0f, MW, MH, 9000000,
-                            &vz, &vlat, &vlon);
+        osd_map_view_update(&view, &cfg, LAT, LON, 30.0f, 90.0f, 90.0f, MW, MH, 9000000,
+                            &vz, &vlat, &vlon);;
         ck("a telemetry stall does not jump the view",
            fabs(vlat - before_lat) < 1e-9 && fabs(vlon - before_lon) < 1e-9);
     }
@@ -224,8 +224,8 @@ int main(void) {
         fixed.auto_zoom = false;
         osd_map_view_init(&view);
         for (int i = 0; i < 600; i++)
-            osd_map_view_update(&view, &fixed, LAT, LON, 28.0f, 90.0f, MW, MH,
-                                1000 + (uint64_t)i * 100, &vz, &vlat, &vlon);
+            osd_map_view_update(&view, &fixed, LAT, LON, 28.0f, 90.0f, 90.0f, MW, MH,
+                                1000 + (uint64_t)i * 100, &vz, &vlat, &vlon);;
         ck("auto_zoom off pins the zoom", vz == 16);
         ck("auto_zoom off still leads the track", vlon > LON);
     }
@@ -277,11 +277,51 @@ int main(void) {
 
         uint64_t t = 300000;
         for (int i = 0; i < 200; i++) {
-            osd_map_view_update(&view, &cfg, LAT, LON, 0.2f, (float)((i * 71) % 360), MW, MH,
-                                t + (uint64_t)i * 100, &vz, &vlat, &vlon);
+            osd_map_view_update(&view, &cfg, LAT, LON, 0.2f, (float)((i * 71) % 360), (float)((i * 71) % 360), MW, MH, t + (uint64_t)i * 100, &vz, &vlat, &vlon);
         }
         ck("a stationary aircraft does not spin the map",
            fabsf(osd_map_view_course(&view) - moving) < 1.0f);
+    }
+
+    {
+        // Heading has no speed gate: a stationary aircraft still points somewhere,
+        // and a heading-up map has to follow it. The track, by contrast, stays
+        // put because a GPS course at a standstill is noise.
+        osd_map_view_init(&view);
+        for (int i = 0; i < 300; i++)
+            osd_map_view_update(&view, &cfg, LAT, LON, 0.0f, 0.0f, 270.0f, MW, MH,
+                                1000 + (uint64_t)i * 100, &vz, &vlat, &vlon);
+        ck("heading follows the nose at a standstill",
+           fabsf(osd_map_view_heading(&view) - 270.0f) < 3.0f);
+        ck("the track ignores a standstill", osd_map_view_course(&view) == 0.0f);
+
+        // In wind the two differ, and a heading-up map has to follow the nose.
+        osd_map_view_init(&view);
+        SETTLE(view, 22.0f, 90.0f, 30);          // course east...
+        for (int i = 0; i < 300; i++)             // ...nose 20 degrees off it
+            osd_map_view_update(&view, &cfg, LAT, LON, 22.0f, 90.0f, 70.0f, MW, MH,
+                                400000 + (uint64_t)i * 100, &vz, &vlat, &vlon);
+        ck("heading and track are reported separately",
+           fabsf(osd_map_view_heading(&view) - 70.0f) < 3.0f &&
+           fabsf(osd_map_view_course(&view) - 90.0f) < 3.0f);
+
+        // And it must keep up: a heading-up map that lags is the whole complaint.
+        {
+            osd_map_view_init(&view);
+            SETTLE(view, 20.0f, 0.0f, 10);
+            float worst = 0.0f;
+            uint64_t t2 = 900000;
+            for (int i = 0; i < 40; i++) {   // 4s of turn at 45 deg/s
+                float nose = (float)(i * 4.5);
+                osd_map_view_update(&view, &cfg, LAT, LON, 20.0f, nose, nose, MW, MH,
+                                    t2 + (uint64_t)i * 100, &vz, &vlat, &vlon);
+                float lag = fabsf(osd_map_view_heading(&view) - nose);
+                if (lag > 180.0f) lag = 360.0f - lag;
+                if (i > 10 && lag > worst) worst = lag;
+            }
+            ck("heading keeps up through a 45deg/s turn", worst < 15.0f);
+        }
+
     }
 
     printf("\n%s (%d failure%s)\n", fails ? "FAILURES" : "ALL PASS", fails, fails == 1 ? "" : "s");

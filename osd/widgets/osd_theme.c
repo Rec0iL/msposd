@@ -337,9 +337,10 @@ static void apply_kv(osd_theme_t *t, const char *section, const char *key, const
 		else if (!strcasecmp(key, "orientation")) {
 			if (!strcasecmp(val, "north"))
 				t->map_orientation = 0;
-			else if (!strcasecmp(val, "track") || !strcasecmp(val, "heading") ||
-					 !strcasecmp(val, "course"))
+			else if (!strcasecmp(val, "track") || !strcasecmp(val, "course"))
 				t->map_orientation = 1;
+			else if (!strcasecmp(val, "heading") || !strcasecmp(val, "nose"))
+				t->map_orientation = 2;
 		} else if (!strcasecmp(key, "auto_zoom") && parse_bool(val, &b))
 			t->map_auto_zoom = b;
 		else if (!strcasecmp(key, "zoom_min") && parse_float(val, &f))

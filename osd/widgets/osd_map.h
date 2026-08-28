@@ -114,6 +114,10 @@ typedef struct {
 	// vector so a track crossing north eases the short way round, and held
 	// still below walking pace, where reported course is noise.
 	double dir_e, dir_n;
+	// Smoothed *heading* - where the nose points - kept separately from the
+	// track. A camera looks where the nose looks, so a map meant to agree with
+	// the video follows this, not the ground course; in wind they differ.
+	double hdg_e, hdg_n;
 	int zoom;              // the zoom in force
 	int want_zoom;         // what the current speed asks for
 	uint64_t want_since_ms;
@@ -122,6 +126,10 @@ typedef struct {
 /// The bearing the smoothed track points, in degrees. 0 until the aircraft has
 /// moved fast enough for its course to mean anything.
 float osd_map_view_course(const osd_map_view_t *v);
+
+/// The smoothed heading, in degrees. Unlike the track this has no speed gate -
+/// which way the nose points is meaningful standing still.
+float osd_map_view_heading(const osd_map_view_t *v);
 
 void osd_map_view_init(osd_map_view_t *v);
 
@@ -134,6 +142,7 @@ void osd_map_view_update(osd_map_view_t *v,
 	double lon,
 	float speed_mps,
 	float course_deg,
+	float heading_deg,
 	int w,
 	int h,
 	uint64_t now_ms,

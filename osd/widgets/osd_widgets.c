@@ -521,16 +521,18 @@ static bool map_rect(const osd_theme_t *th, const osd_element_t *lat_e, const os
 	int x1 = (ox + ow) > (lx + lw) ? (ox + ow) : (lx + lw);
 	int y1 = (oy + oh) > (ly + lh) ? (oy + oh) : (ly + lh);
 
-	// Two readouts on one row, or stacked one above the other, are a list - not
+	// Two readouts on one row, or squarely one above the other, are a list - not
 	// the opposite corners of a rectangle. Read as a map they give a letterbox
-	// strip or a narrow column, so the placement is taken at face value and the
+	// strip or a bare column, so the placement is taken at face value and the
 	// coordinates are drawn as ordinary value panels instead.
+	//
+	// Only an exact column match is rejected. Merely *overlapping* columns are
+	// how you ask for a narrow map: the readouts are 10 cells wide, so demanding
+	// they sit fully side by side would put a 20-cell floor on the map's width.
 	if (lat_e->row == lon_e->row)
 		return false;
-	const int lat_end = lat_e->col + lat_e->width;
-	const int lon_end = lon_e->col + lon_e->width;
-	if (lat_e->col < lon_end && lon_e->col < lat_end)
-		return false; // their columns overlap: one is below the other
+	if (lat_e->col == lon_e->col)
+		return false; // exactly one above the other: a list, not a rectangle
 
 	int w = x1 - x0, h = y1 - y0;
 	if (w > th->map_max_w)
@@ -576,12 +578,14 @@ static void draw_map(osd_surface_t *s, const osd_theme_t *th, osd_font_t *font,
 	int zoom = th->map_zoom;
 	double lat = ac_lat, lon = ac_lon;
 	osd_map_view_update(&st->map_view, &vcfg, ac_lat, ac_lon, st->ground_speed_mps, st->course_deg,
-		w, h, now_ms, &zoom, &lat, &lon);
+		st->heading_deg, w, h, now_ms, &zoom, &lat, &lon);
 
-	// Track-up turns the map so the ground track points up the screen. The
-	// smoothed track is used, not the raw course, or the map would twitch with
-	// every GPS update.
-	const float rot = th->map_orientation == 1 ? osd_map_view_course(&st->map_view) : 0.0f;
+	// Turning the map: track-up follows the ground course, heading-up follows
+	// the nose - which is what agrees with a nose-mounted camera. Either way the
+	// smoothed value is used, or the map twitches with every packet.
+	const float rot = th->map_orientation == 1   ? osd_map_view_course(&st->map_view)
+					  : th->map_orientation == 2 ? osd_map_view_heading(&st->map_view)
+												 : 0.0f;
 
 	const float heading_deg = st->heading_deg;
 	const bool home_valid = st->home_valid;
