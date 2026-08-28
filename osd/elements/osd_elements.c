@@ -53,10 +53,114 @@ static const osd_anchor_t kAnchorsBtfl[] = {
 
 // Battery icon ranges, full -> empty. The icon beside a voltage is what marks it
 // as battery voltage, and its index is the FC's own coarse charge gauge.
+// Blanks tolerated between a symbol and its value, for right-aligned fields.
+// Two covers a three-digit field showing a single digit.
+#define VALUE_MAX_LEADING_BLANKS 2
+
 #define INAV_BATT_FULL 0x63
 #define INAV_BATT_EMPTY 0x69
 #define BTFL_BATT_FULL 0x90
 #define BTFL_BATT_EMPTY 0x96
+
+// OSD messages, from INAV's src/main/io/osd.h and Betaflight's
+// src/main/osd/osd_warnings.c. Like flight modes these carry no symbol, so they
+// are matched as text. Prefix matching, because several are formatted with a
+// value appended at runtime.
+//
+// Severity decides the colour: a failsafe and a landing notice are both
+// messages, but only one of them should be red.
+typedef struct {
+	const char *text;
+	int severity; // matches osd_element_t::severity
+} osd_message_t;
+
+static const osd_message_t kMessages[] = {
+	// --- critical: the aircraft is in trouble now
+	{"FAILSAFE", 2},
+	{"FAILSAFE MODE ENABLED", 2},
+	{"!FS!", 2},
+	{"FAIL SAFE", 2},
+	{"!MOVE STICKS TO EXIT FS!", 2},
+	{"DISABLED BY FAILSAFE", 2},
+	{"EMERGENCY LANDING", 2},
+	{"(EMERGENCY LANDING)", 2},
+	{"NO RC LINK", 2},
+	{"GPS FAILURE", 2},
+	{"GYRO FAILURE", 2},
+	{"COMPASS FAILURE", 2},
+	{"BAROMETER FAILURE", 2},
+	{"ACCELEROMETER FAILURE", 2},
+	{"HARDWARE FAILURE", 2},
+	{"LOW BATTERY", 2},
+	{"LAND NOW", 2},
+	{"BATTERY CONT", 2},
+	{"RSSI LOW", 2},
+	{"RSNR LOW", 2},
+	{"CRASHFLIP SW", 2},
+	{"RESCUE FAIL", 2},
+	{"POSHOLD FAIL", 2},
+	{"WP FLYAWAY", 2},
+	{"WP GPS LOST", 2},
+	{"WP MAG FAULT", 2},
+	{"WP STALLED", 2},
+	{"!NO HOME POSITION!", 2},
+	{"AVOIDING FENCE BREACH", 2},
+	{"NO FLY ZONE", 2},
+
+	// --- warning: needs attention, not yet an emergency
+	{"ACCELEROMETER NOT CALIBRATED", 1},
+	{"COMPASS NOT CALIBRATED", 1},
+	{"AIRCRAFT IS NOT LEVEL", 1},
+	{"INVALID SETTING", 1},
+	{"INVALID FONT", 1},
+	{"NO PREARM", 1},
+	{"DISABLE ARM SWITCH FIRST", 1},
+	{"DISABLE NAVIGATION FIRST", 1},
+	{"CANCEL WP TO EXIT RTH", 1},
+	{"JUMP WAYPOINT MISCONFIGURED", 1},
+	{"CLI IS ACTIVE", 1},
+	{"NOT ENOUGH MEMORY", 1},
+	{"AUTOTRIM IS ACTIVE", 1},
+	{"GRD TEST > MOTORS DISABLED", 1},
+	{"MOTOR BEEPER ACTIVE", 1},
+	{"CPU OVERLOAD", 1},
+	{"OVER CAP", 1},
+	{"LINK QUALITY", 1},
+	{"RSSI DBM", 1},
+	{"MOVE STICKS TO ABORT", 1},
+	{"ENTERING NFZ IN", 1},
+	{"LEAVING FZ IN", 1},
+	{"OUTSIDE FZ", 1},
+	{"FLY OUT NFZ", 1},
+	{"AVOIDING NO FLY ZONES", 1},
+	{"** REARM PERIOD:", 1},
+	{"WP ABORT", 1},
+	{"WP FULL", 1},
+
+	// --- info: normal state, worth showing but not alarming
+	{"! ARMED !", 0},
+	{"ARMED", 0},
+	{"DISARMED", 0},
+	{"LANDED", 0},
+	{"LANDING", 0},
+	{"HOVERING", 0},
+	{"AUTOLAUNCH", 0},
+	{"EN ROUTE TO HOME", 0},
+	{"ADJUSTING RTH ALTITUDE", 0},
+	{"ADJUSTING WP ALTITUDE", 0},
+	{"LOITERING AROUND HOME", 0},
+	{"LOITERING AROUND SAFEHOME", 0},
+	{"DIVERTING TO SAFEHOME", 0},
+	{"BEGIN LINEAR DESCENT", 0},
+	{"* MISSION LOADED *", 0},
+	{"*MISSION LOADED*", 0},
+	{"HEADFREE", 0},
+	{"(HEADFREE)", 0},
+	{"BEACON ON", 0},
+	{"WP COMPLETE", 0},
+	{"WP LANDING", 0},
+	{NULL, 0},
+};
 
 // Flight modes carry no symbol at all, so they are matched as words instead.
 static const char *kFlightModes[] = {"ACRO", "ANGL", "ANGLE", "HOR", "HORIZON", "HORZ", "AIR",
@@ -123,6 +227,7 @@ const char *osd_element_type_name(osd_element_type_t type) {
 	case OSD_ELEM_THROTTLE: return "throttle";
 	case OSD_ELEM_FLIGHT_TIME: return "flight_time";
 	case OSD_ELEM_FLIGHT_MODE: return "flight_mode";
+	case OSD_ELEM_WARNING: return "warning";
 	default: return "none";
 	}
 }
@@ -169,7 +274,21 @@ int osd_elements_scan(osd_glyph_getter get,
 			int first_col = col, last_col = col;
 
 			if (anchor->anchor_leads) {
-				for (int c = col + 1; c < cols && len < (int)sizeof(text) - 3; c++) {
+				// Values are right-aligned in their field, so a short reading
+				// leaves blanks between the symbol and the digits: RSSI 0 is
+				// drawn as "<sym> 0", throttle as "<sym> 53". Stopping at the
+				// first blank loses exactly those cases - which are the low,
+				// blinking, and therefore most important ones.
+				int c = col + 1;
+				int skipped = 0;
+				while (c < cols && skipped < VALUE_MAX_LEADING_BLANKS) {
+					uint16_t g2 = get(c, row, ctx);
+					if (g2 != 0x20 && g2 != 0)
+						break;
+					c++;
+					skipped++;
+				}
+				for (; c < cols && len < (int)sizeof(text) - 3; c++) {
 					char ch[2];
 					int n = glyph_to_chars_ex(get(c, row, ctx), ch, anchor->kind == VAL_TIME);
 					if (n == 0)
@@ -182,7 +301,16 @@ int osd_elements_scan(osd_glyph_getter get,
 				// Collect leftwards, then reverse: the number precedes the symbol.
 				char rev[24];
 				int rlen = 0;
-				for (int c = col - 1; c >= 0 && rlen < (int)sizeof(rev) - 3; c--) {
+				int c = col - 1;
+				int skipped = 0;
+				while (c >= 0 && skipped < VALUE_MAX_LEADING_BLANKS) {
+					uint16_t g2 = get(c, row, ctx);
+					if (g2 != 0x20 && g2 != 0)
+						break;
+					c--;
+					skipped++;
+				}
+				for (; c >= 0 && rlen < (int)sizeof(rev) - 3; c--) {
 					char ch[2];
 					int n = glyph_to_chars(get(c, row, ctx), ch);
 					if (n == 0)
@@ -223,6 +351,10 @@ int osd_elements_scan(osd_glyph_getter get,
 			if (anchor->lead_icon && first_col > 0 &&
 				get(first_col - 1, row, ctx) == anchor->lead_icon)
 				first_col--;
+			// The element spans from its symbol through its value, including
+			// any blanks skipped between them, so clearing it removes the lot.
+			if (anchor->anchor_leads && first_col > col)
+				first_col = col;
 
 			// A battery icon before the number is what makes a volt reading
 			// *battery* voltage, and its position in the range is the flight
@@ -263,10 +395,68 @@ int osd_elements_scan(osd_glyph_getter get,
 		}
 	}
 
+	// OSD messages occupy a whole row of text, so the row is trimmed and matched
+	// as a unit rather than word by word.
+	for (int row = 0; row < rows && found < max_out; row++) {
+		char line[80];
+		int ll = 0;
+		int first = -1, last = -1;
+		for (int c = 0; c < cols && ll < (int)sizeof(line) - 1; c++) {
+			uint16_t g = get(c, row, ctx);
+			char ch = (g >= 0x20 && g < 0x7F) ? (char)g : ' ';
+			line[ll++] = ch;
+			if (ch != ' ') {
+				if (first < 0)
+					first = c;
+				last = c;
+			}
+		}
+		line[ll] = '\0';
+		if (first < 0)
+			continue;
+
+		// Trim into a buffer the same size as osd_element_t::text, so the match
+		// and the stored text cannot disagree about length. Nothing in
+		// kMessages is anywhere near this long.
+		char trimmed[48];
+		int tl = 0;
+		for (int i = first; i <= last && tl < (int)sizeof(trimmed) - 1; i++)
+			trimmed[tl++] = line[i];
+		trimmed[tl] = '\0';
+		if (tl < 3)
+			continue;
+
+		for (int i = 0; kMessages[i].text; i++) {
+			size_t mlen = strlen(kMessages[i].text);
+			if (strncmp(trimmed, kMessages[i].text, mlen) != 0)
+				continue;
+			// Must be the whole message, not a prefix of a longer word.
+			if (trimmed[mlen] != '\0' && trimmed[mlen] != ' ' && trimmed[mlen] != ':')
+				continue;
+			osd_element_t *e = &out[found++];
+			memset(e, 0, sizeof(*e));
+			e->type = OSD_ELEM_WARNING;
+			e->row = (uint8_t)row;
+			e->col = (uint8_t)first;
+			e->width = (uint8_t)(last - first + 1);
+			e->severity = kMessages[i].severity;
+			e->value_valid = false;
+			snprintf(e->text, sizeof(e->text), "%s", trimmed);
+			break;
+		}
+	}
+
 	// Flight modes carry no anchor glyph - the firmware just prints the word - so
 	// they are matched as text. Only exact matches against the known list are
 	// accepted, to avoid turning arbitrary on-screen words into widgets.
 	for (int row = 0; row < rows && found < max_out; row++) {
+		bool row_is_message = false;
+		for (int i = 0; i < found; i++)
+			if (out[i].type == OSD_ELEM_WARNING && out[i].row == row)
+				row_is_message = true;
+		if (row_is_message)
+			continue;
+
 		int c = 0;
 		while (c < cols) {
 			uint16_t g = get(c, row, ctx);

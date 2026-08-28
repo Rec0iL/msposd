@@ -1008,6 +1008,35 @@ static void scan_osd_elements() {
 		}
 	}
 
+	// One-shot dump of the whole grid, so element positions can be read directly
+	// instead of inferred from a screenshot.
+	if (verbose) {
+		static int dumped = 0;
+		if (++dumped == 60) { // well past boot, layout settled
+			printf("=== GRID DUMP (row: cells, . = blank, ? = symbol) ===\n");
+			for (int y = 0; y < MAX_OSD_HEIGHT; y++) {
+				char line[MAX_OSD_WIDTH + 1];
+				int any = 0;
+				for (int x = 0; x < MAX_OSD_WIDTH; x++) {
+					uint16_t g = character_map_complete[x][y];
+					if (g == 0 || g == 0x20)
+						line[x] = '.';
+					else if (g >= 0x20 && g < 0x7F) {
+						line[x] = (char)g;
+						any = 1;
+					} else {
+						line[x] = '?';
+						any = 1;
+					}
+				}
+				line[MAX_OSD_WIDTH] = '\0';
+				if (any)
+					printf("r%02d |%s|\n", y, line);
+			}
+			printf("=== END GRID DUMP ===\n");
+		}
+	}
+
 	static int last_reported = -1;
 	if (verbose && detected_element_count != last_reported) {
 		last_reported = detected_element_count;
@@ -1048,6 +1077,39 @@ static bool osd_msg_enabled = false;
 // render over video.
 BITMAP bmpBuff;
 
+// Pixel rectangle actually occupied by a run of grid cells.
+//
+// Must mirror Convert2SmallGlyph(): in small-font mode msposd draws most of the
+// screen with 24x36 glyphs, bottom-aligned below row 10 and right-aligned beyond
+// column 32, while rows 0,1,9,10,18,19 and columns 20..32 stay 36x54. Assuming a
+// uniform grid clears the wrong pixels, which leaves the original glyphs on
+// screen beside the widget that replaced them.
+static void widget_cell_rect(int col, int row, int span, void *ctx, int *x, int *y, int *w, int *h) {
+	(void)ctx;
+	const int nw = current_display_info.font_width;   // 36
+	const int nh = current_display_info.font_height;  // 54
+	const int sw = 24, sh = 36;
+
+	bool small = (matrix_size > 10 && bmpFntSmall.u32Width > 0) && (row > 1 && row < 18) &&
+				 (row != 9 && row != 10) && (col < 20 || col > 32);
+
+	if (!small) {
+		*x = X_OFFSET + col * nw;
+		*y = row * nh;
+		*w = span * nw;
+		*h = nh;
+		return;
+	}
+
+	int x0 = (col > 32) ? (52 * nw - (52 - col) * sw) : (col * sw);
+	int last = col + span - 1;
+	int x1 = (last > 32) ? (52 * nw - (52 - last) * sw) : (last * sw);
+	*x = x0;
+	*w = (x1 + sw) - x0;
+	*y = (row > 10) ? (20 * nh - 2 * (nh - sh) - (20 - row) * sh) : (2 * (nh - sh) + row * sh);
+	*h = sh;
+}
+
 // Draws widgets over the glyph layer. Runs after the characters are composed so
 // a widget can cover the text it replaces.
 static void draw_widgets_overlay() {
@@ -1070,13 +1132,12 @@ static void draw_widgets_overlay() {
 	osd_surface_init(&surf, (uint8_t *)bmpBuff.pData, bmpBuff.u32Width, bmpBuff.u32Height,
 		(int)bmpBuff.u32Width * 4);
 
-	// Same mapping the glyph pass uses: d_x = col * font_width + X_OFFSET,
-	// d_y = row * font_height.
 	osd_grid_t grid = {
 		.cell_w = current_display_info.font_width,
 		.cell_h = current_display_info.font_height,
 		.off_x = X_OFFSET,
 		.off_y = 0,
+		.cell_rect = widget_cell_rect,
 	};
 
 	int drawn = osd_widgets_draw_all(&surf, &osd_theme, osd_widget_font, &osd_widget_state,

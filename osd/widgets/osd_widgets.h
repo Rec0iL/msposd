@@ -32,10 +32,19 @@ void osd_widgets_state_init(osd_widget_state_t *st);
 /// Resets the peak on the disarmed -> armed edge, so "peak" means this flight.
 void osd_widgets_update_arm(osd_widget_state_t *st, bool armed);
 
-/// Grid geometry: cell size in pixels and the overlay's origin offset.
+/// Maps a run of grid cells to its pixel rectangle.
+typedef void (*osd_cell_rect_fn)(int col, int row, int span, void *ctx, int *x, int *y, int *w,
+	int *h);
+
+/// Grid geometry. cell_w/cell_h describe the uniform case; `cell_rect` overrides
+/// it when the host places glyphs non-uniformly. msposd does exactly that in
+/// small-font mode, where rows are 36px not 54px and the edges are bottom- and
+/// right-aligned, so assuming a uniform grid clears the wrong pixels.
 typedef struct {
 	int cell_w, cell_h;
 	int off_x, off_y;
+	osd_cell_rect_fn cell_rect;
+	void *ctx;
 } osd_grid_t;
 
 /// Returns the number of widgets drawn.

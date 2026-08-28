@@ -27,6 +27,7 @@ typedef enum {
 	OSD_ELEM_THROTTLE,
 	OSD_ELEM_FLIGHT_TIME,
 	OSD_ELEM_FLIGHT_MODE,
+	OSD_ELEM_WARNING,
 	OSD_ELEM_TYPE_COUNT
 } osd_element_type_t;
 
@@ -46,9 +47,14 @@ typedef struct {
 	bool has_battery_icon;
 	// 0 = full .. 6 = empty, the flight controller's own coarse gauge.
 	int battery_level;
-	// Some values are not numbers (flight time "05:36", mode "ACRO"); for those
-	// `value_valid` is false and only `text` is meaningful.
-	char text[24];
+	// For warnings: how loudly to shout. A failsafe and a "LANDED" notice are
+	// both messages, but only one of them should be red.
+	enum { OSD_SEV_INFO = 0, OSD_SEV_WARN, OSD_SEV_CRIT } severity;
+	// Some values are not numbers (flight time "05:36", mode "ACRO", and OSD
+	// messages); for those `value_valid` is false and only `text` is meaningful.
+	// Sized for the longest message the firmwares emit, e.g.
+	// "ACCELEROMETER NOT CALIBRATED".
+	char text[48];
 } osd_element_t;
 
 /// Reads one glyph from the host's character map.

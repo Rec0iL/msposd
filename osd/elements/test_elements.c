@@ -165,6 +165,93 @@ int main(void) {
     n = osd_elements_scan(getter, NULL, COLS, ROWS, "BTFL", els, 32);
     check("BTFL sats via 0x1E/0x1F", n == 1 && els[0].type == OSD_ELEM_SATS && els[0].value > 8.9);
 
+    // --- right-aligned fields put blanks between symbol and value.
+    // These are the low/blinking readings, so losing them is worst-case.
+    memset(grid, 0x20, sizeof(grid));
+    { uint16_t g[] = {0x01,0x20,'0'}; put(0, 23, g, 3); }        // RSSI "<sym> 0"
+    n = osd_elements_scan(getter, NULL, COLS, ROWS, "INAV", els, 32);
+    check("RSSI 0 with one leading blank", n == 1 && els[0].type == OSD_ELEM_RSSI
+          && els[0].value >= 0.0f && els[0].value < 0.01f);
+    check("RSSI element starts at its symbol", n == 1 && els[0].col == 23);
+
+    memset(grid, 0x20, sizeof(grid));
+    { uint16_t g[] = {0x95,0x20,'5','3'}; put(2, 2, g, 4); }     // THR "<sym> 53"
+    n = osd_elements_scan(getter, NULL, COLS, ROWS, "INAV", els, 32);
+    check("throttle with leading blank", n == 1 && els[0].type == OSD_ELEM_THROTTLE
+          && els[0].value > 52.9 && els[0].value < 53.1);
+    check("throttle spans symbol to value", n == 1 && els[0].col == 2 && els[0].width == 4);
+
+    memset(grid, 0x20, sizeof(grid));
+    { uint16_t g[] = {0x08,0x09,0x20,'8'}; put(11, 0, g, 4); }   // sats "<icon> 8"
+    n = osd_elements_scan(getter, NULL, COLS, ROWS, "INAV", els, 32);
+    check("single-digit sats with blank", n == 1 && els[0].type == OSD_ELEM_SATS
+          && els[0].value > 7.9 && els[0].value < 8.1);
+
+    // throttle is a fixed 4-cell field: symbol + 3 digit slots, right aligned.
+    // 100 fills it, 7 leaves two blanks.
+    memset(grid, 0x20, sizeof(grid));
+    { uint16_t g[] = {0x95,'1','0','0'}; put(2, 2, g, 4); }
+    n = osd_elements_scan(getter, NULL, COLS, ROWS, "INAV", els, 32);
+    check("throttle 100 fills the field", n == 1 && els[0].value > 99.9 && els[0].value < 100.1);
+
+    memset(grid, 0x20, sizeof(grid));
+    { uint16_t g[] = {0x95,0x20,0x20,'7'}; put(2, 2, g, 4); }
+    n = osd_elements_scan(getter, NULL, COLS, ROWS, "INAV", els, 32);
+    check("throttle 7 with two leading blanks", n == 1 && els[0].value > 6.9 && els[0].value < 7.1);
+    check("throttle 7 still spans the whole field", n == 1 && els[0].col == 2 && els[0].width == 4);
+
+    // a symbol with only blanks after it is still not an element
+    memset(grid, 0x20, sizeof(grid));
+    { uint16_t g[] = {0x95}; put(4, 4, g, 1); }
+    n = osd_elements_scan(getter, NULL, COLS, ROWS, "INAV", els, 32);
+    check("symbol with no value anywhere: ignored", n == 0);
+
+    // --- OSD messages: severity must come from the message, not the theme
+    #define PUTSTR(r,c,str) do{ const char*_s=(str); for(int _i=0;_s[_i];_i++) grid[r][(c)+_i]=(uint16_t)_s[_i]; }while(0)
+
+    memset(grid, 0x20, sizeof(grid));
+    PUTSTR(15, 10, "FAILSAFE MODE ENABLED");
+    n = osd_elements_scan(getter, NULL, COLS, ROWS, "INAV", els, 32);
+    check("failsafe recognised", n == 1 && els[0].type == OSD_ELEM_WARNING);
+    check("failsafe is critical", n == 1 && els[0].severity == OSD_SEV_CRIT);
+    check("message text preserved whole", n == 1 && strcmp(els[0].text, "FAILSAFE MODE ENABLED") == 0);
+    check("message spans its text", n == 1 && els[0].col == 10 && els[0].width == 21);
+
+    memset(grid, 0x20, sizeof(grid));
+    PUTSTR(15, 4, "ACCELEROMETER NOT CALIBRATED");
+    n = osd_elements_scan(getter, NULL, COLS, ROWS, "INAV", els, 32);
+    check("28-char message not truncated", n == 1
+          && strcmp(els[0].text, "ACCELEROMETER NOT CALIBRATED") == 0);
+    check("not-calibrated is a warning", n == 1 && els[0].severity == OSD_SEV_WARN);
+
+    memset(grid, 0x20, sizeof(grid));
+    PUTSTR(15, 4, "LANDED");
+    n = osd_elements_scan(getter, NULL, COLS, ROWS, "INAV", els, 32);
+    check("LANDED is info, not alarming", n == 1 && els[0].severity == OSD_SEV_INFO);
+
+    memset(grid, 0x20, sizeof(grid));
+    PUTSTR(15, 4, "LOW BATTERY");
+    n = osd_elements_scan(getter, NULL, COLS, ROWS, "BTFL", els, 32);
+    check("BTFL LOW BATTERY is critical", n == 1 && els[0].severity == OSD_SEV_CRIT);
+
+    // messages formatted with a trailing value still match
+    memset(grid, 0x20, sizeof(grid));
+    PUTSTR(15, 4, "ENTERING NFZ IN 30 S");
+    n = osd_elements_scan(getter, NULL, COLS, ROWS, "INAV", els, 32);
+    check("message with trailing value matches", n == 1 && els[0].type == OSD_ELEM_WARNING);
+
+    // a word that merely starts like a message must not match
+    memset(grid, 0x20, sizeof(grid));
+    PUTSTR(15, 4, "LANDEDXYZ");
+    n = osd_elements_scan(getter, NULL, COLS, ROWS, "INAV", els, 32);
+    check("prefix of a longer word rejected", n == 0);
+
+    // a message row must not also yield a flight mode
+    memset(grid, 0x20, sizeof(grid));
+    PUTSTR(15, 4, "AUTOLAUNCH");
+    n = osd_elements_scan(getter, NULL, COLS, ROWS, "INAV", els, 32);
+    check("message row not double-claimed as mode", n == 1 && els[0].type == OSD_ELEM_WARNING);
+
     printf("\n%s (%d failure%s)\n", fails ? "FAILURES" : "ALL PASS", fails, fails == 1 ? "" : "s");
     return fails != 0;
 }

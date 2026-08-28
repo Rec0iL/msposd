@@ -38,10 +38,11 @@ static const char *label_for(const osd_element_t *e) {
 		if (e->has_battery_icon)
 			return "BATTERY";
 		return e->is_per_cell ? "CELL VOLTAGE" : "PACK VOLTAGE";
-	case OSD_ELEM_SATS: return "SATELLITES";
+	case OSD_ELEM_SATS: return ""; // icon carries the meaning, no word needed
 	case OSD_ELEM_THROTTLE: return "THROTTLE";
 	case OSD_ELEM_FLIGHT_TIME: return "FLIGHT TIME";
 	case OSD_ELEM_FLIGHT_MODE: return "MODE";
+	case OSD_ELEM_WARNING: return ""; // the message is the content
 	case OSD_ELEM_CURRENT: return "CURRENT DRAW";
 	case OSD_ELEM_MAH: return "CAPACITY USED";
 	case OSD_ELEM_ALTITUDE: return "ALTITUDE";
@@ -105,6 +106,15 @@ static osd_color_t state_color(const osd_element_t *e, const osd_theme_t *th, in
 				return th->warn;
 		}
 	}
+	if (e->type == OSD_ELEM_WARNING) {
+		// Severity is decided when the message is recognised, not by the theme:
+		// a theme must not be able to make a failsafe look routine.
+		if (e->severity == OSD_SEV_CRIT)
+			return th->crit;
+		if (e->severity == OSD_SEV_WARN)
+			return th->warn;
+		return th->accent;
+	}
 	if (e->type == OSD_ELEM_SATS) {
 		if (e->value < 6.0f)
 			return th->crit;
@@ -135,7 +145,8 @@ static void format_value(const osd_element_t *e, float peak, int cells, char *ma
 	case OSD_ELEM_SATS: snprintf(main, mn, "%.0f", e->value); break;
 	case OSD_ELEM_THROTTLE: snprintf(main, mn, "%.0f%%", e->value); break;
 	case OSD_ELEM_FLIGHT_TIME:
-	case OSD_ELEM_FLIGHT_MODE: snprintf(main, mn, "%s", e->text); break;
+	case OSD_ELEM_FLIGHT_MODE:
+	case OSD_ELEM_WARNING: snprintf(main, mn, "%s", e->text); break;
 	case OSD_ELEM_CURRENT:
 		snprintf(main, mn, "%.0fA", e->value);
 		snprintf(sub, sn, "/%.0fA", peak);
@@ -145,6 +156,18 @@ static void format_value(const osd_element_t *e, float peak, int cells, char *ma
 	case OSD_ELEM_RSSI: snprintf(main, mn, "%.0f%%", e->value); break;
 	default: snprintf(main, mn, "%s", e->text); break;
 	}
+}
+
+// A satellite: dish plus signal arcs. Replaces the word "SATELLITES", which
+// says nothing the icon does not.
+static void draw_sat_icon(osd_surface_t *s, float x, float y, float size, osd_color_t c) {
+	const float w = 2.0f;
+	osd_draw_line(s, x, y + size * 0.45f, x + size * 0.5f, y + size * 0.45f, w, c);
+	osd_draw_line(s, x + size * 0.25f, y + size * 0.45f, x + size * 0.25f, y + size * 0.1f, w, c);
+	osd_draw_line(s, x + size * 0.05f, y + size * 0.1f, x + size * 0.45f, y + size * 0.1f, w, c);
+	// signal arcs
+	osd_draw_line(s, x + size * 0.6f, y + size * 0.3f, x + size * 0.78f, y + size * 0.12f, w, c);
+	osd_draw_line(s, x + size * 0.62f, y + size * 0.5f, x + size * 0.92f, y + size * 0.2f, w, c);
 }
 
 // Flight modes arrive as bare words - the firmware sends no glyph for them - so
@@ -242,9 +265,20 @@ static void measure_panel(const osd_theme_t *th, osd_font_t *font, const osd_ele
 	*out_w = need > min_w ? need : min_w;
 
 	float frac = fill_fraction(e, th, peak, cells);
-	*out_h = (frac < 0.0f)
-		? th->tab_height * scale + th->label_size * scale + th->pad_y * scale * 2.0f
-		: th->panel_height * scale;
+	bool has_label = label_for(e)[0] != '\0';
+	if (e->type == OSD_ELEM_WARNING) {
+		// A message is a line of text, not a reading: size the banner to it
+		// rather than to a fixed panel, so long messages are never clipped.
+		*out_w = (float)mm.width + th->pad_x * scale * 3.0f;
+		*out_h = th->value_size * scale * 1.6f;
+		return;
+	}
+	if (frac >= 0.0f)
+		*out_h = th->panel_height * scale;
+	else if (has_label)
+		*out_h = th->tab_height * scale + th->label_size * scale + th->pad_y * scale * 2.0f;
+	else // icon-only: just the tab, nothing below it to make room for
+		*out_h = th->tab_height * scale + th->pad_y * scale;
 }
 
 static void draw_one(osd_surface_t *s, const osd_theme_t *th, osd_font_t *font,
@@ -290,6 +324,18 @@ static void draw_one(osd_surface_t *s, const osd_theme_t *th, osd_font_t *font,
 	// show through the translucent backdrop.
 	osd_clear_rect(s, (int)px, (int)py, (int)w, (int)h);
 
+	if (e->type == OSD_ELEM_WARNING) {
+		// Banner: a solid severity bar on the left, message beside it. Deliberately
+		// plainer than a reading panel so it reads instantly.
+		osd_fill_rect(s, (int)px, (int)py, (int)w, (int)h, fill);
+		osd_fill_rect(s, (int)px, (int)py, (int)(5.0f * scale), (int)h, accent);
+		osd_draw_line(s, px, py, px + w, py, 1.0f, edge);
+		osd_draw_line(s, px, py + h, px + w, py + h, 1.0f, edge);
+		osd_text_draw(s, font, value_size, (int)(px + pad_x * 1.6f),
+			(int)(py + h * 0.5f + value_size * 0.36f), main_txt, accent);
+		return;
+	}
+
 	osd_pointf_t poly[7];
 	panel_path(poly, px, py, w, h, tab_h, chamfer);
 	osd_fill_poly(s, poly, 7, fill);
@@ -314,10 +360,12 @@ static void draw_one(osd_surface_t *s, const osd_theme_t *th, osd_font_t *font,
 
 	if (e->type == OSD_ELEM_FLIGHT_MODE)
 		draw_mode_icon(s, e->text, px + pad_x, py + tab_h * 0.5f, label_size * 1.6f, accent);
+	else if (e->type == OSD_ELEM_SATS)
+		draw_sat_icon(s, px + pad_x, py + tab_h * 0.25f, tab_h * 0.55f, accent);
 
-	// label
-	osd_text_draw_tracked(s, font, label_size, (int)(px + pad_x),
-		(int)(py + tab_h + label_size + 12.0f * scale), label_for(e), label_tracking, label);
+	if (label_for(e)[0] != '\0')
+		osd_text_draw_tracked(s, font, label_size, (int)(px + pad_x),
+			(int)(py + tab_h + label_size + 12.0f * scale), label_for(e), label_tracking, label);
 
 	// bar
 	if (frac >= 0.0f) {
@@ -350,6 +398,19 @@ static void draw_one(osd_surface_t *s, const osd_theme_t *th, osd_font_t *font,
 			}
 		}
 	}
+}
+
+// Pixel rectangle of a cell run, via the host's mapping when it provides one.
+static void cell_rect(const osd_grid_t *g, int col, int row, int span, int *x, int *y, int *w,
+	int *h) {
+	if (g->cell_rect) {
+		g->cell_rect(col, row, span, g->ctx, x, y, w, h);
+		return;
+	}
+	*x = g->off_x + col * g->cell_w;
+	*y = g->off_y + row * g->cell_h;
+	*w = span * g->cell_w;
+	*h = g->cell_h;
 }
 
 // Axis-aligned rectangle overlap.
@@ -427,8 +488,9 @@ int osd_widgets_draw_all(osd_surface_t *s, const osd_theme_t *th, osd_font_t *fo
 	// beside the widget that replaced it.
 	for (int i = 0; i < n; i++) {
 		const osd_element_t *e = &list[i];
-		osd_clear_rect(s, grid->off_x + e->col * grid->cell_w, grid->off_y + e->row * grid->cell_h,
-			e->width * grid->cell_w, grid->cell_h);
+		int cx, cy, cw, ch;
+		cell_rect(grid, e->col, e->row, e->width, &cx, &cy, &cw, &ch);
+		osd_clear_rect(s, cx, cy, cw, ch);
 	}
 
 	float placed_x[OSD_ELEM_TYPE_COUNT], placed_y[OSD_ELEM_TYPE_COUNT];
@@ -441,8 +503,10 @@ int osd_widgets_draw_all(osd_surface_t *s, const osd_theme_t *th, osd_font_t *fo
 		float opacity = osd_theme_element_opacity(th, e->type);
 		float scale = osd_theme_element_scale(th, e->type);
 
-		float px = (float)(grid->off_x + e->col * grid->cell_w);
-		float py = (float)(grid->off_y + e->row * grid->cell_h);
+		int cx, cy, cw, ch;
+		cell_rect(grid, e->col, e->row, e->width, &cx, &cy, &cw, &ch);
+		float px = (float)cx;
+		float py = (float)cy;
 		float w, h;
 		measure_panel(th, font, e, st->current_peak, st->cell_count, scale, &w, &h);
 
