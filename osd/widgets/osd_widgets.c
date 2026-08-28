@@ -224,14 +224,14 @@ static void draw_mode_icon(osd_surface_t *s, const char *mode, float x, float y,
 		osd_draw_line(s, x + h, y - h * 0.8f, x, y + h * 0.7f, w, c);
 		osd_draw_line(s, x, y + h * 0.7f, x + size, y + h * 0.7f, w, c);
 		osd_draw_line(s, x + size, y + h * 0.7f, x + h, y - h * 0.8f, w, c);
-	} else if (!strcmp(mode, "ACRO")) { // rate chevrons
-		osd_draw_line(s, x, y + h * 0.5f, x + h * 0.7f, y - h * 0.5f, w, c);
-		osd_draw_line(s, x + h * 0.7f, y - h * 0.5f, x + size * 0.7f, y + h * 0.5f, w, c);
-		osd_draw_line(s, x + size * 0.7f, y + h * 0.5f, x + size, y - h * 0.2f, w, c);
+	} else if (!strcmp(mode, "ACRO")) { // ">>" : rates, unrestricted
+		osd_draw_line(s, x, y - h * 0.55f, x + size * 0.38f, y, w, c);
+		osd_draw_line(s, x + size * 0.38f, y, x, y + h * 0.55f, w, c);
+		osd_draw_line(s, x + size * 0.52f, y - h * 0.55f, x + size * 0.9f, y, w, c);
+		osd_draw_line(s, x + size * 0.9f, y, x + size * 0.52f, y + h * 0.55f, w, c);
 	} else { // any mode added to the word list without an icon yet
-		osd_draw_line(s, x, y + h * 0.5f, x + h * 0.7f, y - h * 0.5f, w, c);
-		osd_draw_line(s, x + h * 0.7f, y - h * 0.5f, x + size * 0.7f, y + h * 0.5f, w, c);
-		osd_draw_line(s, x + size * 0.7f, y + h * 0.5f, x + size, y - h * 0.2f, w, c);
+		osd_draw_line(s, x + size * 0.2f, y - h * 0.55f, x + size * 0.6f, y, w, c);
+		osd_draw_line(s, x + size * 0.6f, y, x + size * 0.2f, y + h * 0.55f, w, c);
 	}
 }
 
@@ -359,7 +359,7 @@ static void draw_one(osd_surface_t *s, const osd_theme_t *th, osd_font_t *font,
 	}
 
 	if (e->type == OSD_ELEM_FLIGHT_MODE)
-		draw_mode_icon(s, e->text, px + pad_x, py + tab_h * 0.5f, label_size * 1.6f, accent);
+		draw_mode_icon(s, e->text, px + pad_x, py + tab_h * 0.5f, tab_h * 0.5f, accent);
 	else if (e->type == OSD_ELEM_SATS)
 		draw_sat_icon(s, px + pad_x, py + tab_h * 0.25f, tab_h * 0.55f, accent);
 
@@ -523,7 +523,13 @@ int osd_widgets_draw_all(osd_surface_t *s, const osd_theme_t *th, osd_font_t *fo
 			if (!clash)
 				break;
 		}
-		// Keep it on screen even if pushing down ran out of room.
+		// Keep the panel on screen. An element in column 0 or on the last row
+		// would otherwise put half its widget outside the viewport - the grid
+		// position is where the *value* was, not where a whole panel fits.
+		if (px + w > (float)s->width)
+			px = (float)s->width - w;
+		if (px < 0.0f)
+			px = 0.0f;
 		if (py + h > (float)s->height)
 			py = (float)s->height - h;
 		if (py < 0.0f)
