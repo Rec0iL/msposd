@@ -315,6 +315,51 @@ int main(void) {
 		}
 	}
 
+	// --- a half-drawn reading must not evict a good cached one. A flight
+	// controller redraws a cell at a time, so a scan catches a field mid-write
+	// perhaps 5% of the time; if that flushes the cache the widget blinks out
+	// for a frame, and for lat/lon the map goes with it.
+	{
+		osd_widget_state_t st;
+		osd_widgets_state_init(&st);
+		osd_theme_t map_th = th;
+		map_th.map_enabled = true;
+		map_th.elem_enabled[OSD_ELEM_LATITUDE] = true;
+		map_th.elem_enabled[OSD_ELEM_LONGITUDE] = true;
+		osd_grid_t g = {CELL_W, CELL_H, 8, 0, NULL, NULL};
+		osd_surface_t s;
+
+		// A good frame: both coordinates parse.
+		clear_grid();
+		grid[6][1] = SYM_LAT;
+		put_str(6, 2, "52.47890");
+		grid[14][4] = SYM_LON;
+		put_str(14, 5, "13.65127");
+		osd_element_t els[32];
+		int n = osd_elements_scan(getter, NULL, COLS, ROWS, "INAV", els, 32);
+		memset(buf, 0, (size_t)SURF_W * SURF_H * 4);
+		osd_surface_init(&s, buf, SURF_W, SURF_H, SURF_W * 4);
+		osd_widgets_draw_all(&s, &map_th, font, &st, els, n, &g, 1000);
+		const bool map_first = !st.layout[OSD_ELEM_LATITUDE].valid;
+		check("half-drawn: a good frame draws the map", map_first);
+
+		// The next frame catches latitude mid-redraw: the symbol is there and a
+		// stray character follows, so it is recognised but parses to nothing.
+		clear_grid();
+		grid[6][1] = SYM_LAT;
+		put_str(6, 2, "-");
+		grid[14][4] = SYM_LON;
+		put_str(14, 5, "13.65127");
+		n = osd_elements_scan(getter, NULL, COLS, ROWS, "INAV", els, 32);
+		memset(buf, 0, (size_t)SURF_W * SURF_H * 4);
+		osd_surface_init(&s, buf, SURF_W, SURF_H, SURF_W * 4);
+		osd_widgets_draw_all(&s, &map_th, font, &st, els, n, &g, 1100);
+		check("half-drawn: the map survives the bad frame",
+			!st.layout[OSD_ELEM_LATITUDE].valid);
+		check("half-drawn: the good reading is kept",
+			st.last[OSD_ELEM_LATITUDE].value > 52.47f && st.last[OSD_ELEM_LATITUDE].value < 52.48f);
+	}
+
 	printf("\n%s (%d failures)\n", fails ? "FAILURES" : "ALL PASS", fails);
 	return fails ? 1 : 0;
 }

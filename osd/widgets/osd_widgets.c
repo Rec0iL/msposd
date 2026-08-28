@@ -417,6 +417,13 @@ static void draw_one(osd_surface_t *s, const osd_theme_t *th, osd_font_t *font,
 	}
 }
 
+// Elements whose content is words, not a number, so `value_valid` says nothing
+// about whether there is anything to draw.
+static bool element_is_textual(osd_element_type_t type) {
+	return type == OSD_ELEM_FLIGHT_TIME || type == OSD_ELEM_FLIGHT_MODE ||
+		   type == OSD_ELEM_WARNING;
+}
+
 // Pixel rectangle of a cell run, via the host's mapping when it provides one.
 static void cell_rect(const osd_grid_t *g, int col, int row, int span, int *x, int *y, int *w,
 	int *h) {
@@ -810,10 +817,22 @@ int osd_widgets_draw_all(osd_surface_t *s, const osd_theme_t *th, osd_font_t *fo
 	// Refresh the cache with everything visible this frame.
 	for (int i = 0; i < count; i++) {
 		const osd_element_t *e = &els[i];
-		if (e->type > OSD_ELEM_NONE && e->type < OSD_ELEM_TYPE_COUNT) {
-			st->last[e->type] = *e;
-			st->last_seen_ms[e->type] = now_ms;
-		}
+		if (e->type <= OSD_ELEM_NONE || e->type >= OSD_ELEM_TYPE_COUNT)
+			continue;
+
+		// A flight controller redraws its OSD a cell at a time, so a scan can
+		// catch a numeric field half-written and parse nothing out of it.
+		// Letting that overwrite a good cached reading is worse than missing one
+		// frame of it: the draw list drops numeric elements with no value, so
+		// the widget blinks out - and for latitude and longitude, the whole map
+		// goes with it for a frame. The hold below already covers an element
+		// that vanishes; this covers one that arrives broken.
+		if (!e->value_valid && !element_is_textual(e->type) && st->last_seen_ms[e->type] != 0 &&
+			(float)(now_ms - st->last_seen_ms[e->type]) <= th->element_hold_ms)
+			continue;
+
+		st->last[e->type] = *e;
+		st->last_seen_ms[e->type] = now_ms;
 	}
 
 	// Build the draw list from the cache, so an element that blinked out is
@@ -826,11 +845,9 @@ int osd_widgets_draw_all(osd_surface_t *s, const osd_theme_t *th, osd_font_t *fo
 		if ((float)(now_ms - st->last_seen_ms[ty]) > th->element_hold_ms)
 			continue;
 		const osd_element_t *e = &st->last[ty];
-		// Elements whose content is words, not a number, so `value_valid` says
-		// nothing about whether there is anything to draw. Leaving messages out
-		// of this list recognised every failsafe and then dropped it silently.
-		bool textual = (e->type == OSD_ELEM_FLIGHT_TIME || e->type == OSD_ELEM_FLIGHT_MODE ||
-						e->type == OSD_ELEM_WARNING);
+		// Messages have to count as textual here too, or every failsafe is
+		// recognised and then dropped silently for having no numeric value.
+		const bool textual = element_is_textual(e->type);
 		if ((!e->value_valid && !textual) || !osd_theme_element_enabled(th, e->type))
 			continue;
 		if (osd_theme_element_opacity(th, e->type) <= 0.01f)

@@ -17,3 +17,8 @@ void osd_record_overlay(const char *path, int fps);
 /// Called by the render loop once a frame is fully composed, so the recorder
 /// never captures one mid-compose.
 void osd_record_publish_frame(void);
+
+/// Mirrors one artificial-horizon line into the recording. On this platform the
+/// AHI is drawn with cairo onto the window and never enters the overlay buffer,
+/// so a capture would otherwise have an empty centre.
+void osd_record_mirror_line(int x0, int y0, int x1, int y1, uint32_t rgba, double thickness);

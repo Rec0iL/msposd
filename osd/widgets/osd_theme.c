@@ -17,6 +17,7 @@ void osd_theme_defaults(osd_theme_t *t) {
 	t->mode = OSD_MODE_FANCY;
 	t->global_opacity = 1.0f;
 	t->global_scale = 1.0f;
+	t->hide_glyphs = true;
 
 	t->accent = OSD_ARGB(0xFF, 0x00, 0xE5, 0xFF);
 	t->warn = OSD_ARGB(0xFF, 0xFF, 0xB3, 0x00);

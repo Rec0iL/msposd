@@ -25,6 +25,13 @@ typedef struct {
 	osd_mode_t mode;
 	float global_opacity; // 0..1, multiplies every widget's alpha
 	float global_scale;   // multiplies every widget's size
+	// In fancy mode the widgets replace the flight controller's own text, so
+	// the glyph layer underneath is normally not drawn at all. Leaving it on
+	// makes it flash through in the frames where an element is not recognised
+	// and its cells are therefore never cleared. Turning it back on shows OSD
+	// content the recogniser does not know about - a firmware's tuning page,
+	// say - at the cost of that flicker.
+	bool hide_glyphs;
 
 	// palette
 	osd_color_t accent, warn, crit, good, threat;

@@ -3,6 +3,8 @@
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 #include <X11/extensions/XShm.h>
+
+#include "../../osd.h"
 #include <cairo/cairo-xlib.h>
 #include <cairo/cairo.h>
 #include <stdio.h>
@@ -692,6 +694,12 @@ void drawLineGS(int x0, int y0, int x1, int y1, uint32_t color, double thickness
 	double g = ((color >> 16) & 0xFF) / 255.0;
 	double b = ((color >> 8) & 0xFF) / 255.0;
 	double a = (color & 0xFF) / 255.0; // 128
+
+	// These coordinates are final - the pitch/roll transform above has already
+	// been applied - so this is the one place that sees the horizon exactly as
+	// it is drawn. Nothing else does: this path goes to cairo, not to the
+	// overlay buffer, so an overlay recording would have an empty centre.
+	osd_record_mirror_line(x0, y0, x1, y1, color, thickness);
 
 	// smoother appearance: high-quality antialiasing and round caps/joins
 	if (false){

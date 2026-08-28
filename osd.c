@@ -1121,6 +1121,43 @@ static size_t osd_record_shadow_size = 0;
 static bool osd_record_shadow_ready = false;
 static pthread_mutex_t osd_record_lock = PTHREAD_MUTEX_INITIALIZER;
 
+// The artificial horizon never reaches the overlay buffer on this platform:
+// LineDirect and LineTranspose route through drawLineGS, which draws with cairo
+// straight onto the X11 window. Visible on screen, absent from any buffer
+// capture, whatever point you publish at.
+//
+// So the ladder is mirrored into a layer of its own and composited onto the
+// published frame. A layer rather than bmpBuff itself, because the glyph redraw
+// that clears bmpBuff is throttled - drawing into it directly would smear the
+// ladder across the frames where no clear happened. The on-screen path is left
+// exactly as it was.
+static uint8_t *osd_record_ahi = NULL;
+static size_t osd_record_ahi_size = 0;
+
+void osd_record_mirror_line(int x0, int y0, int x1, int y1, uint32_t rgba, double thickness) {
+	if (!osd_record_running || !bmpBuff.pData || PIXEL_FORMAT_DEFAULT != PIXEL_FORMAT_8888)
+		return;
+	const size_t n = (size_t)bmpBuff.u32Width * bmpBuff.u32Height * 4;
+
+	pthread_mutex_lock(&osd_record_lock);
+	if (osd_record_ahi_size != n) {
+		free(osd_record_ahi);
+		osd_record_ahi = calloc(1, n);
+		osd_record_ahi_size = osd_record_ahi ? n : 0;
+	}
+	if (osd_record_ahi) {
+		osd_surface_t s;
+		osd_surface_init(&s, osd_record_ahi, bmpBuff.u32Width, bmpBuff.u32Height,
+			(int)bmpBuff.u32Width * 4);
+		// getcolor() packs R,G,B,A; the rasteriser wants A,R,G,B.
+		const osd_color_t c = OSD_ARGB(rgba & 0xFF, (rgba >> 24) & 0xFF, (rgba >> 16) & 0xFF,
+			(rgba >> 8) & 0xFF);
+		osd_draw_line(&s, (float)x0, (float)y0, (float)x1, (float)y1,
+			(float)(thickness > 1.0 ? thickness : 1.0), c);
+	}
+	pthread_mutex_unlock(&osd_record_lock);
+}
+
 void osd_record_publish_frame(void) {
 	if (!osd_record_running || !bmpBuff.pData || PIXEL_FORMAT_DEFAULT != PIXEL_FORMAT_8888)
 		return;
@@ -1134,6 +1171,22 @@ void osd_record_publish_frame(void) {
 	}
 	if (osd_record_shadow) {
 		memcpy(osd_record_shadow, bmpBuff.pData, n);
+
+		// Lay the mirrored horizon over the frame, then clear it so the next
+		// frame starts from nothing.
+		if (osd_record_ahi && osd_record_ahi_size == n) {
+			for (size_t i = 0; i < n; i += 4) {
+				const uint8_t a = osd_record_ahi[i + 3];
+				if (!a)
+					continue;
+				uint8_t *d = osd_record_shadow + i;
+				const uint8_t *sp = osd_record_ahi + i;
+				for (int ch = 0; ch < 3; ch++)
+					d[ch] = (uint8_t)((sp[ch] * a + d[ch] * (255 - a)) / 255);
+				d[3] = (uint8_t)(a + (d[3] * (255 - a)) / 255);
+			}
+			memset(osd_record_ahi, 0, n);
+		}
 		osd_record_shadow_ready = true;
 	}
 	pthread_mutex_unlock(&osd_record_lock);
@@ -2727,6 +2780,10 @@ static void draw_screenBMP2(bool OnlyAHI) {
 
 	bmpBuff.enPixelFormat = PIXEL_FORMAT_DEFAULT; //  PIXEL_FORMAT_DEFAULT ;//PIXEL_FORMAT_1555;
 
+	// Resolved once per frame rather than per cell.
+	const bool hide_glyph_layer =
+		osd_widgets_ready && osd_theme.mode == OSD_MODE_FANCY && osd_theme.hide_glyphs;
+
 	if (DrawOSD) { // If we only need message without icons
 		bool try_smaller_font = false;
 		for (int y = 0; y < current_display_info.char_height; y++) {
@@ -2740,6 +2797,14 @@ static void draw_screenBMP2(bool OnlyAHI) {
 				}
 
 				uint16_t c = OnlyAHI? character_map_complete[x][y] : character_map[x][y];//If this was requeted because of AHI, take last valid map
+
+				// The widgets replace this text, so in fancy mode it is not
+				// drawn at all. Recognition reads the character map, not these
+				// pixels, so nothing is lost by skipping the blit - and it ends
+				// the glyphs flashing through on frames where an element is
+				// missed and its cells are therefore never cleared.
+				if (hide_glyph_layer)
+					c = 0;
 
 				// if (ReplaceWidgets_Slow(&x,&y)) // Logic moved to InjectChars
 				//     continue;
@@ -2843,8 +2908,6 @@ static void draw_screenBMP2(bool OnlyAHI) {
 	if (DrawOSD) {
 		// ClearScreen();
 		Render(bmp_x86, bmpBuff.u32Width, bmpBuff.u32Height);
-		// The frame is complete here; hand a copy to the recorder if one is running.
-		osd_record_publish_frame();
 
 		if (AHI_Enabled == 2)
 			draw_AHI();
@@ -2853,6 +2916,11 @@ static void draw_screenBMP2(bool OnlyAHI) {
 		if (RCWidgetX > 0)
 			drawRC_Channels(
 				RCWidgetX, RCWidgetY, channels[0], channels[1], channels[2], channels[3]);
+
+		// Everything that draws into bmpBuff has run by here. On this path the
+		// horizon and the RC bars land *after* Render, so publishing at Render
+		// handed the recorder a frame with the middle of the screen missing.
+		osd_record_publish_frame();
 
 		// strcpy(air_unit_info_msg,"30fps/MCS1 7Mb reset test message that can
 		// be 80 characters long that are enough");
