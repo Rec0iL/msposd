@@ -23,6 +23,10 @@ typedef enum {
 	OSD_ELEM_LATITUDE,
 	OSD_ELEM_LONGITUDE,
 	OSD_ELEM_RSSI,
+	OSD_ELEM_SATS,
+	OSD_ELEM_THROTTLE,
+	OSD_ELEM_FLIGHT_TIME,
+	OSD_ELEM_FLIGHT_MODE,
 	OSD_ELEM_TYPE_COUNT
 } osd_element_type_t;
 
@@ -36,7 +40,15 @@ typedef struct {
 	// True when a voltage looks like a single cell rather than a whole pack.
 	// INAV/BF mark both with SYM_VOLT, so only magnitude can tell them apart.
 	bool is_per_cell;
-	char text[24]; // decoded numeric text, for debugging and fallback rendering
+	// True when a battery icon sits beside the value, which is what identifies
+	// this as *battery* voltage rather than any other volt reading. The icon is
+	// absorbed into the element so it is not left behind next to the widget.
+	bool has_battery_icon;
+	// 0 = full .. 6 = empty, the flight controller's own coarse gauge.
+	int battery_level;
+	// Some values are not numbers (flight time "05:36", mode "ACRO"); for those
+	// `value_valid` is false and only `text` is meaningful.
+	char text[24];
 } osd_element_t;
 
 /// Reads one glyph from the host's character map.

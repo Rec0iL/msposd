@@ -926,6 +926,46 @@ static uint16_t element_glyph_getter(int col, int row, void *ctx) {
 	return character_map_complete[col][row];
 }
 
+#include "osd/widgets/osd_widgets.h"
+
+#define OSD_THEME_PATH "themes/tactical/theme.ini"
+
+static osd_theme_t osd_theme;
+static osd_font_t *osd_widget_font = NULL;
+static osd_widget_state_t osd_widget_state;
+static bool osd_widgets_ready = false;
+static char osd_widget_font_path[256] = "";
+
+// Loads the theme, and the font it names. Re-run when the theme file changes so
+// settings can be edited live; the font is only reloaded if its path changed.
+static void widgets_sync_config() {
+	bool changed = false;
+	if (!osd_widgets_ready) {
+		osd_theme_defaults(&osd_theme);
+		osd_widgets_state_init(&osd_widget_state);
+		osd_theme_load(&osd_theme, OSD_THEME_PATH); // absent file just keeps defaults
+		osd_widgets_ready = true;
+		changed = true;
+	} else if (osd_theme_reload_if_changed(&osd_theme, OSD_THEME_PATH)) {
+		changed = true;
+		if (verbose)
+			printf("OSD theme reloaded: %s, mode=%s\n", osd_theme.name,
+				osd_theme.mode == OSD_MODE_FANCY ? "fancy" : "classic");
+	}
+
+	if (changed && strcmp(osd_widget_font_path, osd_theme.font_path) != 0) {
+		if (osd_widget_font)
+			osd_font_free(osd_widget_font);
+		osd_widget_font = osd_font_load(osd_theme.font_path);
+		snprintf(osd_widget_font_path, sizeof(osd_widget_font_path), "%s", osd_theme.font_path);
+		if (!osd_widget_font)
+			printf("Widget font not found: %s (falling back to classic OSD)\n",
+				osd_theme.font_path);
+	}
+}
+
+static void draw_widgets_overlay();
+
 // Re-scan the finished frame for recognisable elements. Cheap: a single pass
 // over the grid, only on a completed frame, not per render tick.
 static void scan_osd_elements() {
@@ -936,6 +976,37 @@ static void scan_osd_elements() {
 		current_fc_identifier,
 		detected_elements,
 		OSD_MAX_ELEMENTS);
+
+	// Report symbol-looking glyphs we did not claim. Anything non-ASCII in the
+	// grid is an icon the firmware drew, so an unmatched one means an element
+	// type we cannot recognise yet - far easier than guessing from a screenshot.
+	if (verbose) {
+		static uint16_t reported[64];
+		static int reported_n = 0;
+		for (int x = 0; x < MAX_OSD_WIDTH; x++) {
+			for (int y = 0; y < MAX_OSD_HEIGHT; y++) {
+				uint16_t g = character_map_complete[x][y];
+				if (g <= 0x7F)
+					continue; // plain ASCII, not an icon
+				bool claimed = false;
+				for (int i = 0; i < detected_element_count && !claimed; i++) {
+					const osd_element_t *e = &detected_elements[i];
+					if (y == e->row && x >= e->col && x < e->col + e->width)
+						claimed = true;
+				}
+				if (claimed)
+					continue;
+				bool seen = false;
+				for (int i = 0; i < reported_n; i++)
+					if (reported[i] == g)
+						seen = true;
+				if (!seen && reported_n < 64) {
+					reported[reported_n++] = g;
+					printf("Unrecognised OSD symbol 0x%02X at r%02d c%02d\n", g, y, x);
+				}
+			}
+		}
+	}
 
 	static int last_reported = -1;
 	if (verbose && detected_element_count != last_reported) {
@@ -976,6 +1047,48 @@ static bool osd_msg_enabled = false;
 // This will be where we will copy font icons and then pass to Display API  to
 // render over video.
 BITMAP bmpBuff;
+
+// Draws widgets over the glyph layer. Runs after the characters are composed so
+// a widget can cover the text it replaces.
+static void draw_widgets_overlay() {
+	if (!DrawOSD || bmpBuff.pData == NULL)
+		return;
+
+	widgets_sync_config();
+
+	if (osd_theme.mode != OSD_MODE_FANCY || !osd_widget_font)
+		return;
+
+	// Widgets need per-pixel alpha. The camera-side I4/1555 formats cannot
+	// express a translucent backdrop, so there we leave the classic OSD alone.
+	if (PIXEL_FORMAT_DEFAULT != PIXEL_FORMAT_8888)
+		return;
+
+	osd_widgets_update_arm(&osd_widget_state, armed);
+
+	osd_surface_t surf;
+	osd_surface_init(&surf, (uint8_t *)bmpBuff.pData, bmpBuff.u32Width, bmpBuff.u32Height,
+		(int)bmpBuff.u32Width * 4);
+
+	// Same mapping the glyph pass uses: d_x = col * font_width + X_OFFSET,
+	// d_y = row * font_height.
+	osd_grid_t grid = {
+		.cell_w = current_display_info.font_width,
+		.cell_h = current_display_info.font_height,
+		.off_x = X_OFFSET,
+		.off_y = 0,
+	};
+
+	int drawn = osd_widgets_draw_all(&surf, &osd_theme, osd_widget_font, &osd_widget_state,
+		detected_elements, detected_element_count, &grid, get_time_ms());
+
+	static int last_drawn = -1;
+	if (verbose && drawn != last_drawn) {
+		last_drawn = drawn;
+		printf("Widgets drawn: %d (peak %.0fA)\n", drawn, osd_widget_state.current_peak);
+	}
+}
+
 
 // Buffer to hold converted RGBA data to work with Cairo
 unsigned char *bmp_x86 = NULL;
@@ -2423,6 +2536,10 @@ static void draw_screenBMP2(bool OnlyAHI) {
 
 	// strcpy(osds[FULL_OVERLAY_ID].text,"$M $B Test");//"$M $B Test");
 	DrawTextOnOSDBitmap(NULL);
+
+	// Widgets go on top of the glyph layer, before the buffer is handed to the
+	// platform, so they can cover the characters they replace.
+	draw_widgets_overlay();
 
 	stat_screen_refresh_count++;
 	uint64_t step3 = get_time_ms();

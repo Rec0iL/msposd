@@ -48,6 +48,7 @@ void osd_theme_defaults(osd_theme_t *t) {
 	t->cell_max = 4.35f;
 	t->cell_warn = 3.60f;
 	t->cell_crit = 3.40f;
+	t->element_hold_ms = 2000.0f;
 
 	for (int i = 0; i < OSD_ELEM_TYPE_COUNT; i++) {
 		t->elem_enabled[i] = true;
@@ -163,7 +164,9 @@ static void apply_kv(osd_theme_t *t, const char *section, const char *key, const
 	}
 
 	if (!strcasecmp(section, "theme")) {
-		if (!strcasecmp(key, "name"))
+		if (!strcasecmp(key, "element_hold_ms") && parse_float(val, &f))
+			t->element_hold_ms = clampf(f, 0.0f, 10000.0f);
+		else if (!strcasecmp(key, "name"))
 			snprintf(t->name, sizeof(t->name), "%s", val);
 		else if (!strcasecmp(key, "font"))
 			snprintf(t->font_path, sizeof(t->font_path), "%s", val);

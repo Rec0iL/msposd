@@ -12,14 +12,36 @@ void osd_widgets_state_init(osd_widget_state_t *st) {
 void osd_widgets_update_arm(osd_widget_state_t *st, bool armed) {
 	if (!st)
 		return;
-	if (armed && !st->prev_armed)
+	if (armed && !st->prev_armed) {
 		st->current_peak = 0.0f; // new flight, new peak
+		st->cell_count = 0;      // re-infer at arming, in case the pack changed
+	}
 	st->prev_armed = armed;
+}
+
+// A LiPo cell rests between ~3.0V and ~4.35V, so dividing by 3.8 and rounding
+// identifies the count unambiguously for every common pack: 16.7V/3.8 = 4.4 -> 4S.
+static int infer_cell_count(float pack_voltage) {
+	if (pack_voltage < 2.0f)
+		return 0;
+	int cells = (int)((pack_voltage / 3.8f) + 0.5f);
+	if (cells < 1)
+		cells = 1;
+	if (cells > 12)
+		cells = 12;
+	return cells;
 }
 
 static const char *label_for(const osd_element_t *e) {
 	switch (e->type) {
-	case OSD_ELEM_VOLTAGE: return e->is_per_cell ? "CELL VOLTAGE" : "PACK VOLTAGE";
+	case OSD_ELEM_VOLTAGE:
+		if (e->has_battery_icon)
+			return "BATTERY";
+		return e->is_per_cell ? "CELL VOLTAGE" : "PACK VOLTAGE";
+	case OSD_ELEM_SATS: return "SATELLITES";
+	case OSD_ELEM_THROTTLE: return "THROTTLE";
+	case OSD_ELEM_FLIGHT_TIME: return "FLIGHT TIME";
+	case OSD_ELEM_FLIGHT_MODE: return "MODE";
 	case OSD_ELEM_CURRENT: return "CURRENT DRAW";
 	case OSD_ELEM_MAH: return "CAPACITY USED";
 	case OSD_ELEM_ALTITUDE: return "ALTITUDE";
@@ -30,11 +52,25 @@ static const char *label_for(const osd_element_t *e) {
 
 // Bar fill as a fraction, or -1 when the value has no meaningful range and the
 // widget should render as a plain value panel.
-static float fill_fraction(const osd_element_t *e, const osd_theme_t *th, float peak) {
+static float fill_fraction(const osd_element_t *e, const osd_theme_t *th, float peak, int cells) {
 	switch (e->type) {
+	case OSD_ELEM_THROTTLE: {
+		float f = e->value / 100.0f;
+		return f < 0.0f ? 0.0f : (f > 1.0f ? 1.0f : f);
+	}
 	case OSD_ELEM_VOLTAGE: {
+		// With a battery icon we know it is pack voltage, and the inferred cell
+		// count turns it into a per-cell figure and therefore a percentage.
+		if (e->has_battery_icon && cells > 0) {
+			float per_cell = e->value / (float)cells;
+			float span = th->cell_max - th->cell_min;
+			if (span <= 0.0f)
+				return -1.0f;
+			float f = (per_cell - th->cell_min) / span;
+			return f < 0.0f ? 0.0f : (f > 1.0f ? 1.0f : f);
+		}
 		if (!e->is_per_cell)
-			return -1.0f; // pack voltage has no fixed range without cell count
+			return -1.0f; // pack voltage with no cell count has no fixed range
 		float span = th->cell_max - th->cell_min;
 		if (span <= 0.0f)
 			return -1.0f;
@@ -55,11 +91,24 @@ static float fill_fraction(const osd_element_t *e, const osd_theme_t *th, float 
 	}
 }
 
-static osd_color_t state_color(const osd_element_t *e, const osd_theme_t *th) {
-	if (e->type == OSD_ELEM_VOLTAGE && e->is_per_cell) {
-		if (e->value < th->cell_crit)
+static osd_color_t state_color(const osd_element_t *e, const osd_theme_t *th, int cells) {
+	if (e->type == OSD_ELEM_VOLTAGE) {
+		float per_cell = -1.0f;
+		if (e->is_per_cell)
+			per_cell = e->value;
+		else if (e->has_battery_icon && cells > 0)
+			per_cell = e->value / (float)cells;
+		if (per_cell > 0.0f) {
+			if (per_cell < th->cell_crit)
+				return th->crit;
+			if (per_cell < th->cell_warn)
+				return th->warn;
+		}
+	}
+	if (e->type == OSD_ELEM_SATS) {
+		if (e->value < 6.0f)
 			return th->crit;
-		if (e->value < th->cell_warn)
+		if (e->value < 10.0f)
 			return th->warn;
 	}
 	if (e->type == OSD_ELEM_RSSI) {
@@ -72,10 +121,21 @@ static osd_color_t state_color(const osd_element_t *e, const osd_theme_t *th) {
 }
 
 // "20A" then "/67A" for current; a single string for everything else.
-static void format_value(const osd_element_t *e, float peak, char *main, size_t mn, char *sub, size_t sn) {
+static void format_value(const osd_element_t *e, float peak, int cells, char *main, size_t mn,
+	char *sub, size_t sn) {
 	sub[0] = '\0';
 	switch (e->type) {
-	case OSD_ELEM_VOLTAGE: snprintf(main, mn, "%.2fV", e->value); break;
+	case OSD_ELEM_VOLTAGE:
+		snprintf(main, mn, "%.2fV", e->value);
+		// Show the inferred pack size so the percentage is auditable rather
+		// than a number the user has to trust blindly.
+		if (e->has_battery_icon && cells > 0)
+			snprintf(sub, sn, " %dS", cells);
+		break;
+	case OSD_ELEM_SATS: snprintf(main, mn, "%.0f", e->value); break;
+	case OSD_ELEM_THROTTLE: snprintf(main, mn, "%.0f%%", e->value); break;
+	case OSD_ELEM_FLIGHT_TIME:
+	case OSD_ELEM_FLIGHT_MODE: snprintf(main, mn, "%s", e->text); break;
 	case OSD_ELEM_CURRENT:
 		snprintf(main, mn, "%.0fA", e->value);
 		snprintf(sub, sn, "/%.0fA", peak);
@@ -84,6 +144,71 @@ static void format_value(const osd_element_t *e, float peak, char *main, size_t 
 	case OSD_ELEM_MAH: snprintf(main, mn, "%.0f", e->value); break;
 	case OSD_ELEM_RSSI: snprintf(main, mn, "%.0f%%", e->value); break;
 	default: snprintf(main, mn, "%s", e->text); break;
+	}
+}
+
+// Flight modes arrive as bare words - the firmware sends no glyph for them - so
+// the icon is drawn here rather than recovered from the font.
+static void draw_mode_icon(osd_surface_t *s, const char *mode, float x, float y, float size,
+	osd_color_t c) {
+	const float h = size * 0.5f;
+	const float w = 2.0f;
+
+	if (!strcmp(mode, "RTH")) { // house: return to home
+		osd_draw_line(s, x, y, x + h, y - h * 0.8f, w, c);
+		osd_draw_line(s, x + h, y - h * 0.8f, x + size, y, w, c);
+		osd_draw_line(s, x + size * 0.18f, y, x + size * 0.18f, y + h * 0.8f, w, c);
+		osd_draw_line(s, x + size * 0.82f, y, x + size * 0.82f, y + h * 0.8f, w, c);
+		osd_draw_line(s, x + size * 0.18f, y + h * 0.8f, x + size * 0.82f, y + h * 0.8f, w, c);
+	} else if (!strcmp(mode, "ANGL") || !strcmp(mode, "ANGLE") || !strcmp(mode, "HOR") ||
+			   !strcmp(mode, "HORIZON") || !strcmp(mode, "HORZ")) { // levelled horizon
+		osd_draw_line(s, x, y, x + size * 0.38f, y, w, c);
+		osd_draw_line(s, x + size * 0.62f, y, x + size, y, w, c);
+		osd_draw_line(s, x + size * 0.44f, y, x + size * 0.56f, y, w, c);
+	} else if (!strcmp(mode, "POSHOLD") || !strcmp(mode, "PH")) { // crosshair: hold position
+		osd_draw_line(s, x + h, y - h * 0.7f, x + h, y + h * 0.7f, w, c);
+		osd_draw_line(s, x, y, x + size, y, w, c);
+	} else if (!strcmp(mode, "CRUZ") || !strcmp(mode, "CRUISE") || !strcmp(mode, "CRS") ||
+			   !strcmp(mode, "3CRS")) { // arrow: hold a heading
+		osd_draw_line(s, x, y, x + size, y, w, c);
+		osd_draw_line(s, x + size * 0.62f, y - h * 0.45f, x + size, y, w, c);
+		osd_draw_line(s, x + size * 0.62f, y + h * 0.45f, x + size, y, w, c);
+	} else if (!strcmp(mode, "ALTHOLD") || !strcmp(mode, "AH")) { // lock an altitude
+		osd_draw_line(s, x, y, x + size, y, w, c);
+		osd_draw_line(s, x + h, y - h * 0.8f, x + h, y - h * 0.1f, w, c);
+		osd_draw_line(s, x + h * 0.6f, y - h * 0.45f, x + h, y - h * 0.8f, w, c);
+		osd_draw_line(s, x + h * 1.4f, y - h * 0.45f, x + h, y - h * 0.8f, w, c);
+	} else if (!strcmp(mode, "WP")) { // waypoint flag
+		osd_draw_line(s, x + size * 0.2f, y - h * 0.8f, x + size * 0.2f, y + h * 0.8f, w, c);
+		osd_draw_line(s, x + size * 0.2f, y - h * 0.8f, x + size * 0.9f, y - h * 0.45f, w, c);
+		osd_draw_line(s, x + size * 0.9f, y - h * 0.45f, x + size * 0.2f, y - h * 0.1f, w, c);
+	} else if (!strcmp(mode, "LAUNCH")) { // climbing launch arrow
+		osd_draw_line(s, x, y + h * 0.7f, x + size, y - h * 0.7f, w, c);
+		osd_draw_line(s, x + size * 0.55f, y - h * 0.7f, x + size, y - h * 0.7f, w, c);
+		osd_draw_line(s, x + size, y - h * 0.7f, x + size, y - h * 0.15f, w, c);
+	} else if (!strcmp(mode, "MANU") || !strcmp(mode, "MANUAL")) { // a stick, moved by hand
+		osd_draw_line(s, x + h, y + h * 0.8f, x + h, y - h * 0.4f, w, c);
+		osd_draw_line(s, x + h * 0.55f, y - h * 0.7f, x + h * 1.45f, y - h * 0.7f, w, c);
+		osd_draw_line(s, x, y + h * 0.8f, x + size, y + h * 0.8f, w, c);
+	} else if (!strcmp(mode, "AIR")) { // airflow over a wing
+		osd_draw_line(s, x, y - h * 0.4f, x + size * 0.75f, y - h * 0.4f, w, c);
+		osd_draw_line(s, x + size * 0.25f, y + h * 0.15f, x + size, y + h * 0.15f, w, c);
+		osd_draw_line(s, x, y + h * 0.7f, x + size * 0.6f, y + h * 0.7f, w, c);
+	} else if (!strcmp(mode, "HOLD")) { // pause bars
+		osd_draw_line(s, x + size * 0.3f, y - h * 0.7f, x + size * 0.3f, y + h * 0.7f, w * 1.6f, c);
+		osd_draw_line(s, x + size * 0.7f, y - h * 0.7f, x + size * 0.7f, y + h * 0.7f, w * 1.6f, c);
+	} else if (!strcmp(mode, "FS") || !strcmp(mode, "FAILSAFE")) { // warning triangle
+		osd_draw_line(s, x + h, y - h * 0.8f, x, y + h * 0.7f, w, c);
+		osd_draw_line(s, x, y + h * 0.7f, x + size, y + h * 0.7f, w, c);
+		osd_draw_line(s, x + size, y + h * 0.7f, x + h, y - h * 0.8f, w, c);
+	} else if (!strcmp(mode, "ACRO")) { // rate chevrons
+		osd_draw_line(s, x, y + h * 0.5f, x + h * 0.7f, y - h * 0.5f, w, c);
+		osd_draw_line(s, x + h * 0.7f, y - h * 0.5f, x + size * 0.7f, y + h * 0.5f, w, c);
+		osd_draw_line(s, x + size * 0.7f, y + h * 0.5f, x + size, y - h * 0.2f, w, c);
+	} else { // any mode added to the word list without an icon yet
+		osd_draw_line(s, x, y + h * 0.5f, x + h * 0.7f, y - h * 0.5f, w, c);
+		osd_draw_line(s, x + h * 0.7f, y - h * 0.5f, x + size * 0.7f, y + h * 0.5f, w, c);
+		osd_draw_line(s, x + size * 0.7f, y + h * 0.5f, x + size, y - h * 0.2f, w, c);
 	}
 }
 
@@ -100,10 +225,32 @@ static void panel_path(osd_pointf_t *p, float x, float y, float w, float h, floa
 	p[6] = (osd_pointf_t){x, y + h};
 }
 
-static void draw_one(osd_surface_t *s, const osd_theme_t *th, osd_font_t *font,
-	const osd_element_t *e, float peak, float px, float py, float opacity, float scale) {
+// Panel size, shared by the collision pass and the drawing pass so the
+// rectangle reserved for a widget is exactly the one painted.
+static void measure_panel(const osd_theme_t *th, osd_font_t *font, const osd_element_t *e,
+	float peak, int cells, float scale, float *out_w, float *out_h) {
 	char main_txt[24], sub_txt[16];
-	format_value(e, peak, main_txt, sizeof(main_txt), sub_txt, sizeof(sub_txt));
+	format_value(e, peak, cells, main_txt, sizeof(main_txt), sub_txt, sizeof(sub_txt));
+
+	osd_text_metrics_t mm = {0}, sm = {0};
+	osd_text_measure(font, th->value_size * scale, main_txt, &mm);
+	if (sub_txt[0])
+		osd_text_measure(font, th->value_size * 0.69f * scale, sub_txt, &sm);
+
+	float need = (float)(mm.width + sm.width) + th->pad_x * scale * 2.0f + 140.0f * scale;
+	float min_w = th->panel_min_width * scale;
+	*out_w = need > min_w ? need : min_w;
+
+	float frac = fill_fraction(e, th, peak, cells);
+	*out_h = (frac < 0.0f)
+		? th->tab_height * scale + th->label_size * scale + th->pad_y * scale * 2.0f
+		: th->panel_height * scale;
+}
+
+static void draw_one(osd_surface_t *s, const osd_theme_t *th, osd_font_t *font,
+	const osd_element_t *e, float peak, int cells, float px, float py, float opacity, float scale) {
+	char main_txt[24], sub_txt[16];
+	format_value(e, peak, cells, main_txt, sizeof(main_txt), sub_txt, sizeof(sub_txt));
 
 	// Every dimension scales together, so a resized widget keeps its
 	// proportions rather than just growing its text out of the panel.
@@ -125,18 +272,14 @@ static void draw_one(osd_surface_t *s, const osd_theme_t *th, osd_font_t *font,
 	// Panel width follows the measured value: "92" and "20A/67A" differ a lot,
 	// and a fixed width would clip one or leave the other floating.
 	float text_w = (float)(mm.width + sm.width);
-	float need = text_w + pad_x * 2.0f + 140.0f * scale;
-	float min_w = th->panel_min_width * scale;
-	float w = need > min_w ? need : min_w;
-
 	// Values with no meaningful range get no bar, so they must not reserve its
 	// height - otherwise the panel is mostly empty space.
-	float frac = fill_fraction(e, th, peak);
-	float h = th->panel_height * scale;
-	if (frac < 0.0f)
-		h = tab_h + label_size + pad_y * 2.0f;
+	float frac = fill_fraction(e, th, peak, cells);
+	float w, h;
+	measure_panel(th, font, e, peak, cells, scale, &w, &h);
+	(void)text_w;
 
-	osd_color_t accent = osd_theme_apply_opacity(state_color(e, th), opacity);
+	osd_color_t accent = osd_theme_apply_opacity(state_color(e, th, cells), opacity);
 	osd_color_t fill = osd_theme_apply_opacity(th->panel_fill, opacity);
 	osd_color_t edge = osd_theme_apply_opacity(th->panel_edge, opacity);
 	osd_color_t track = osd_theme_apply_opacity(th->track, opacity);
@@ -168,6 +311,9 @@ static void draw_one(osd_surface_t *s, const osd_theme_t *th, osd_font_t *font,
 	} else {
 		osd_text_draw(s, font, value_size, right - mm.width, baseline, main_txt, accent);
 	}
+
+	if (e->type == OSD_ELEM_FLIGHT_MODE)
+		draw_mode_icon(s, e->text, px + pad_x, py + tab_h * 0.5f, label_size * 1.6f, accent);
 
 	// label
 	osd_text_draw_tracked(s, font, label_size, (int)(px + pad_x),
@@ -206,8 +352,15 @@ static void draw_one(osd_surface_t *s, const osd_theme_t *th, osd_font_t *font,
 	}
 }
 
+// Axis-aligned rectangle overlap.
+static bool rects_overlap(float ax, float ay, float aw, float ah, float bx, float by, float bw,
+	float bh) {
+	return ax < bx + bw && bx < ax + aw && ay < by + bh && by < ay + ah;
+}
+
 int osd_widgets_draw_all(osd_surface_t *s, const osd_theme_t *th, osd_font_t *font,
-	osd_widget_state_t *st, const osd_element_t *els, int count, const osd_grid_t *grid) {
+	osd_widget_state_t *st, const osd_element_t *els, int count, const osd_grid_t *grid,
+	uint64_t now_ms) {
 	if (!s || !th || !font || !st || !els || !grid)
 		return 0;
 	if (th->mode != OSD_MODE_FANCY)
@@ -217,22 +370,108 @@ int osd_widgets_draw_all(osd_surface_t *s, const osd_theme_t *th, osd_font_t *fo
 	for (int i = 0; i < count; i++) {
 		if (els[i].type == OSD_ELEM_CURRENT && els[i].value_valid && els[i].value > st->current_peak)
 			st->current_peak = els[i].value;
+		// Infer pack size once, from the first battery reading we see.
+		if (st->cell_count == 0 && els[i].type == OSD_ELEM_VOLTAGE && els[i].has_battery_icon &&
+			els[i].value_valid)
+			st->cell_count = infer_cell_count(els[i].value);
 	}
 
-	int drawn = 0;
+	// Refresh the cache with everything visible this frame.
 	for (int i = 0; i < count; i++) {
 		const osd_element_t *e = &els[i];
-		if (!e->value_valid || !osd_theme_element_enabled(th, e->type))
-			continue;
+		if (e->type > OSD_ELEM_NONE && e->type < OSD_ELEM_TYPE_COUNT) {
+			st->last[e->type] = *e;
+			st->last_seen_ms[e->type] = now_ms;
+		}
+	}
 
-		float opacity = osd_theme_element_opacity(th, e->type);
-		if (opacity <= 0.01f)
+	// Build the draw list from the cache, so an element that blinked out is
+	// still drawn until its hold expires.
+	osd_element_t list[OSD_ELEM_TYPE_COUNT];
+	int n = 0;
+	for (int ty = 1; ty < OSD_ELEM_TYPE_COUNT; ty++) {
+		if (st->last_seen_ms[ty] == 0)
 			continue;
+		if ((float)(now_ms - st->last_seen_ms[ty]) > th->element_hold_ms)
+			continue;
+		const osd_element_t *e = &st->last[ty];
+		bool textual = (e->type == OSD_ELEM_FLIGHT_TIME || e->type == OSD_ELEM_FLIGHT_MODE);
+		if ((!e->value_valid && !textual) || !osd_theme_element_enabled(th, e->type))
+			continue;
+		if (osd_theme_element_opacity(th, e->type) <= 0.01f)
+			continue;
+		list[n++] = *e;
+	}
+
+	// Place top-to-bottom, left-to-right, and push any panel that would collide
+	// clear of the ones already placed. Flight controller layouts stack elements
+	// a single row apart, while a panel is several rows tall, so overlaps are
+	// the norm rather than the exception; without this the panels bury each
+	// other. Order is preserved, so a vertical list of elements stays a
+	// vertical list of panels.
+	for (int i = 1; i < n; i++) {
+		osd_element_t key = list[i];
+		int j = i - 1;
+		while (j >= 0 && (list[j].row > key.row ||
+							 (list[j].row == key.row && list[j].col > key.col))) {
+			list[j + 1] = list[j];
+			j--;
+		}
+		list[j + 1] = key;
+	}
+
+	// Blank the glyphs of every element we are replacing, before any panel is
+	// painted. This has to be keyed on the element's own grid cells, not on the
+	// panel: collision avoidance can push a panel well away from its element,
+	// and clearing only under the panel would leave the original text on screen
+	// beside the widget that replaced it.
+	for (int i = 0; i < n; i++) {
+		const osd_element_t *e = &list[i];
+		osd_clear_rect(s, grid->off_x + e->col * grid->cell_w, grid->off_y + e->row * grid->cell_h,
+			e->width * grid->cell_w, grid->cell_h);
+	}
+
+	float placed_x[OSD_ELEM_TYPE_COUNT], placed_y[OSD_ELEM_TYPE_COUNT];
+	float placed_w[OSD_ELEM_TYPE_COUNT], placed_h[OSD_ELEM_TYPE_COUNT];
+	int placed = 0;
+	int drawn = 0;
+
+	for (int i = 0; i < n; i++) {
+		const osd_element_t *e = &list[i];
+		float opacity = osd_theme_element_opacity(th, e->type);
+		float scale = osd_theme_element_scale(th, e->type);
 
 		float px = (float)(grid->off_x + e->col * grid->cell_w);
 		float py = (float)(grid->off_y + e->row * grid->cell_h);
-		float scale = osd_theme_element_scale(th, e->type);
-		draw_one(s, th, font, e, st->current_peak, px, py, opacity, scale);
+		float w, h;
+		measure_panel(th, font, e, st->current_peak, st->cell_count, scale, &w, &h);
+
+		for (int attempt = 0; attempt < OSD_ELEM_TYPE_COUNT; attempt++) {
+			bool clash = false;
+			for (int k = 0; k < placed; k++) {
+				if (rects_overlap(px, py, w, h, placed_x[k], placed_y[k], placed_w[k], placed_h[k])) {
+					py = placed_y[k] + placed_h[k] + 6.0f * scale; // drop below it
+					clash = true;
+					st->overlap_warnings++;
+					break;
+				}
+			}
+			if (!clash)
+				break;
+		}
+		// Keep it on screen even if pushing down ran out of room.
+		if (py + h > (float)s->height)
+			py = (float)s->height - h;
+		if (py < 0.0f)
+			py = 0.0f;
+
+		draw_one(s, th, font, e, st->current_peak, st->cell_count, px, py, opacity, scale);
+
+		placed_x[placed] = px;
+		placed_y[placed] = py;
+		placed_w[placed] = w;
+		placed_h[placed] = h;
+		placed++;
 		drawn++;
 	}
 	return drawn;

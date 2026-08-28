@@ -103,6 +103,68 @@ int main(void) {
     n = osd_elements_scan(getter, NULL, COLS, ROWS, "INAV", els, 32);
     check("two elements on one row", n == 2 && els[0].type == OSD_ELEM_VOLTAGE && els[1].type == OSD_ELEM_CURRENT);
 
+    // --- battery icon before a voltage marks it as battery voltage and is absorbed
+    memset(grid, 0x20, sizeof(grid));
+    { uint16_t g[] = {0x63,'1','6','.','7',0x1F}; put(0, 12, g, 6); }   // SYM_BATT_FULL
+    n = osd_elements_scan(getter, NULL, COLS, ROWS, "INAV", els, 32);
+    check("battery icon detected", n == 1 && els[0].has_battery_icon);
+    check("battery level 0 = full", n == 1 && els[0].battery_level == 0);
+    check("battery icon absorbed into col", n == 1 && els[0].col == 12);
+    check("battery voltage value 16.7", n == 1 && els[0].value > 16.69 && els[0].value < 16.71);
+
+    memset(grid, 0x20, sizeof(grid));
+    { uint16_t g[] = {0x69,'1','4','.','0',0x1F}; put(0, 12, g, 6); }   // SYM_BATT_EMPTY
+    n = osd_elements_scan(getter, NULL, COLS, ROWS, "INAV", els, 32);
+    check("battery level 6 = empty", n == 1 && els[0].battery_level == 6);
+
+    // a voltage with no icon must not claim one
+    memset(grid, 0x20, sizeof(grid));
+    { uint16_t g[] = {'4','.','1','4',0x1F}; put(2, 10, g, 5); }
+    n = osd_elements_scan(getter, NULL, COLS, ROWS, "INAV", els, 32);
+    check("no battery icon when absent", n == 1 && !els[0].has_battery_icon);
+
+    // --- satellites: two-cell icon, both halves absorbed
+    memset(grid, 0x20, sizeof(grid));
+    { uint16_t g[] = {0x08,0x09,'1','7'}; put(18, 4, g, 4); }
+    n = osd_elements_scan(getter, NULL, COLS, ROWS, "INAV", els, 32);
+    check("sats detected", n == 1 && els[0].type == OSD_ELEM_SATS);
+    check("sats value 17", n == 1 && els[0].value > 16.9 && els[0].value < 17.1);
+    check("both icon halves absorbed", n == 1 && els[0].col == 4 && els[0].width == 4);
+
+    // --- throttle
+    memset(grid, 0x20, sizeof(grid));
+    { uint16_t g[] = {0x95,'4','5'}; put(6, 2, g, 3); }
+    n = osd_elements_scan(getter, NULL, COLS, ROWS, "INAV", els, 32);
+    check("throttle detected 45", n == 1 && els[0].type == OSD_ELEM_THROTTLE
+          && els[0].value > 44.9 && els[0].value < 45.1);
+
+    // --- flight time keeps the colon and is text, not a number
+    memset(grid, 0x20, sizeof(grid));
+    { uint16_t g[] = {0x9F,'0','5',':','3','6'}; put(7, 2, g, 6); }
+    n = osd_elements_scan(getter, NULL, COLS, ROWS, "INAV", els, 32);
+    check("flight time detected", n == 1 && els[0].type == OSD_ELEM_FLIGHT_TIME);
+    check("flight time text '05:36'", n == 1 && strcmp(els[0].text, "05:36") == 0);
+    check("flight time is not numeric", n == 1 && !els[0].value_valid);
+
+    // --- flight mode word, no symbol involved
+    memset(grid, 0x20, sizeof(grid));
+    { uint16_t g[] = {'A','C','R','O'}; put(14, 8, g, 4); }
+    n = osd_elements_scan(getter, NULL, COLS, ROWS, "INAV", els, 32);
+    check("flight mode ACRO detected", n == 1 && els[0].type == OSD_ELEM_FLIGHT_MODE
+          && strcmp(els[0].text, "ACRO") == 0);
+    check("flight mode position", n == 1 && els[0].col == 8 && els[0].width == 4);
+
+    memset(grid, 0x20, sizeof(grid));
+    { uint16_t g[] = {'B','A','N','A','N','A'}; put(14, 8, g, 6); }
+    n = osd_elements_scan(getter, NULL, COLS, ROWS, "INAV", els, 32);
+    check("unknown word is not a flight mode", n == 0);
+
+    // BTFL uses different sat/throttle codes
+    memset(grid, 0x20, sizeof(grid));
+    { uint16_t g[] = {0x1E,0x1F,'0','9'}; put(3, 3, g, 4); }
+    n = osd_elements_scan(getter, NULL, COLS, ROWS, "BTFL", els, 32);
+    check("BTFL sats via 0x1E/0x1F", n == 1 && els[0].type == OSD_ELEM_SATS && els[0].value > 8.9);
+
     printf("\n%s (%d failure%s)\n", fails ? "FAILURES" : "ALL PASS", fails, fails == 1 ? "" : "s");
     return fails != 0;
 }

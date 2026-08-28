@@ -52,7 +52,7 @@ int main(void){
     th.elem_scale[OSD_ELEM_ALTITUDE] = 1.4f;
     th.elem_scale[OSD_ELEM_RSSI] = 1.0f;
     osd_grid_t g = {CELL_W,CELL_H,8,0};
-    int drawn = osd_widgets_draw_all(&s,&th,font,&st,els,n,&g);
+    int drawn = osd_widgets_draw_all(&s,&th,font,&st,els,n,&g,1000);
     printf("drew %d widgets (peak %.0fA)\n", drawn, st.current_peak);
 
     // Composite the (transparent) overlay over a stand-in video frame, which is

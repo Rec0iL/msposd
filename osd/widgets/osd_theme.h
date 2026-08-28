@@ -41,6 +41,12 @@ typedef struct {
 	// per-cell voltage scale and thresholds
 	float cell_min, cell_max, cell_warn, cell_crit;
 
+	// How long a vanished element keeps being drawn from cache. Flight
+	// controllers blink a critical value by alternating it with blank, so this
+	// must comfortably exceed the blink off-period or the widget flickers away
+	// exactly when the reading matters most.
+	float element_hold_ms;
+
 	// per-element switches, indexed by osd_element_type_t
 	bool elem_enabled[OSD_ELEM_TYPE_COUNT];
 	float elem_opacity[OSD_ELEM_TYPE_COUNT];
