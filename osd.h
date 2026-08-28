@@ -8,3 +8,8 @@ uint64_t get_time_ms();
 /// something other than msposd owns the file - a settings front-end editing it
 /// live, for instance. Takes effect on the next frame.
 void osd_set_theme_path(const char *path);
+
+/// Writes the composed RGBA overlay to `path` as raw bgra frames at `fps`, for
+/// compositing onto recorded video. `path` is normally a fifo with an encoder
+/// on the other end - the frames are uncompressed and large.
+void osd_record_overlay(const char *path, int fps);

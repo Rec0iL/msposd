@@ -1,5 +1,7 @@
 #include <arpa/inet.h>
+#include <errno.h>
 #include <fcntl.h>
+#include <pthread.h>
 #include <libgen.h> // For dirname()
 #include <math.h>
 #include <netinet/in.h>
@@ -1092,6 +1094,97 @@ static bool osd_msg_enabled = false;
 // This will be where we will copy font icons and then pass to Display API  to
 // render over video.
 BITMAP bmpBuff;
+
+// Overlay recording. The composed RGBA overlay is written to `path` as raw
+// frames at a fixed rate, so it can be composited onto real video offline -
+// ffmpeg reads the same pixels the ground station draws, with their alpha,
+// rather than a screen grab of them.
+//
+// A fixed cadence rather than one frame per render: the OSD updates whenever
+// telemetry arrives, which is irregular, and a constant frame rate is what
+// lines a recording up with a video shot at a constant frame rate.
+//
+// At 1912x1080 this is ~8MB a frame, so `path` is normally a fifo with an
+// encoder on the other end, not a file on disk.
+static int osd_record_fd = -1;
+static int osd_record_fps = 30;
+static pthread_t osd_record_thread;
+static bool osd_record_running = false;
+
+static void *osd_record_loop(void *arg) {
+	(void)arg;
+	const long period_ns = 1000000000L / (osd_record_fps > 0 ? osd_record_fps : 30);
+	bool announced = false;
+
+	while (osd_record_running) {
+		struct timespec t0;
+		clock_gettime(CLOCK_MONOTONIC, &t0);
+
+		if (bmpBuff.pData && bmpBuff.u32Width && bmpBuff.u32Height &&
+			PIXEL_FORMAT_DEFAULT == PIXEL_FORMAT_8888) {
+			if (!announced) {
+				announced = true;
+				// The consumer needs the geometry to decode the stream.
+				printf("Recording overlay %ux%u bgra @%dfps\n", bmpBuff.u32Width,
+					bmpBuff.u32Height, osd_record_fps);
+				fflush(stdout);
+			}
+			const size_t n = (size_t)bmpBuff.u32Width * bmpBuff.u32Height * 4;
+			const uint8_t *p = (const uint8_t *)bmpBuff.pData;
+			size_t off = 0;
+			while (off < n) {
+				ssize_t w = write(osd_record_fd, p + off, n - off);
+				if (w <= 0) {
+					if (errno == EINTR)
+						continue;
+					// A closed pipe means the encoder went away; stop quietly
+					// rather than taking the OSD down with it.
+					osd_record_running = false;
+					break;
+				}
+				off += (size_t)w;
+			}
+		}
+
+		struct timespec t1;
+		clock_gettime(CLOCK_MONOTONIC, &t1);
+		long spent = (t1.tv_sec - t0.tv_sec) * 1000000000L + (t1.tv_nsec - t0.tv_nsec);
+		long sleep_ns = period_ns - spent;
+		if (sleep_ns > 0) {
+			struct timespec ts = {sleep_ns / 1000000000L, sleep_ns % 1000000000L};
+			nanosleep(&ts, NULL);
+		}
+	}
+
+	if (osd_record_fd >= 0) {
+		close(osd_record_fd);
+		osd_record_fd = -1;
+	}
+	return NULL;
+}
+
+void osd_record_overlay(const char *path, int fps) {
+	if (!path || !*path || osd_record_running)
+		return;
+	if (fps > 0)
+		osd_record_fps = fps;
+
+	// Blocking open: with a fifo this waits for the encoder to attach, which is
+	// what keeps the first frames from being dropped on the floor.
+	osd_record_fd = open(path, O_WRONLY);
+	if (osd_record_fd < 0) {
+		printf("Cannot open overlay recording target %s: %s\n", path, strerror(errno));
+		return;
+	}
+	osd_record_running = true;
+	if (pthread_create(&osd_record_thread, NULL, osd_record_loop, NULL) != 0) {
+		printf("Cannot start overlay recording thread\n");
+		osd_record_running = false;
+		close(osd_record_fd);
+		osd_record_fd = -1;
+	}
+}
+
 
 // Pixel rectangle actually occupied by a run of grid cells.
 //

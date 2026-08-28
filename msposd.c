@@ -93,6 +93,10 @@ int minAggPckts = 3;
 bool monitor_wfb = false;
 static int temp = false;
 
+// Set by --record-overlay; the recorder is started once the OSD is up, because
+// opening a fifo blocks until the encoder on the other end attaches.
+static const char *record_overlay_path = NULL;
+
 static void print_usage() {
 	printf("Usage: msposd [OPTIONS]\n"
 		"Where:\n"
@@ -114,6 +118,8 @@ static void print_usage() {
 		"	   --mspvtx      Enable mspvtx support\n"
 		"      --subtitle <path>  Enable OSD/SRT recording\n"
 		"      --theme <path>     Widget theme ini to read, and re-read when it changes\n"
+		"      --record-overlay <path>  Write the raw bgra overlay at 30fps to <path>,\n"
+		"                         normally a fifo, for compositing onto recorded video\n"
 		"	-v --verbose     Show debug info\n"
 		"	-h --help        Display this help\n",
 			default_master, default_baudrate, default_out_addr);
@@ -1477,6 +1483,7 @@ int main(int argc, char **argv) {
 		{"mspvtx", no_argument, NULL, '1'},
 		{"subtitle", required_argument, NULL, 's'},
 		{"theme", required_argument, NULL, 'T'},
+		{"record-overlay", required_argument, NULL, 'O'},
 		{"mavlink", required_argument, NULL, 'M'},
 		{"verbose", no_argument, NULL, 'v'},
 		{"help", no_argument, NULL, 'h'},
@@ -1605,6 +1612,10 @@ int main(int argc, char **argv) {
 			printf("OSD theme: %s\n", optarg);
 			break;
 
+		case 'O':
+			record_overlay_path = optarg;
+			break;
+
 		case 'v':
 			verbose = true;
 			printf("Verbose mode!\n");
@@ -1648,6 +1659,9 @@ int main(int argc, char **argv) {
 		}
 		// loadfonts
 	}
+
+	if (record_overlay_path)
+		osd_record_overlay(record_overlay_path, 30);
 
 	return handle_data(port_name, baudrate, out_addr);
 }
