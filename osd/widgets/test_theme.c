@@ -63,6 +63,22 @@ int main(void) {
     check("per-element * global opacity", o > 0.24f && o < 0.26f);
     check("apply_opacity halves alpha", OSD_A(osd_theme_apply_opacity(OSD_ARGB(200,1,2,3), 0.5f)) == 100);
 
+    // per-element size scale
+    osd_theme_defaults(&t);
+    check("default scale is 1.0", osd_theme_element_scale(&t, OSD_ELEM_VOLTAGE) > 0.99f
+                               && osd_theme_element_scale(&t, OSD_ELEM_VOLTAGE) < 1.01f);
+    f = fopen("/tmp/_s.ini", "w");
+    fputs("[osd]\nscale = 2.0\n[elements]\nvoltage_scale = 1.5\ncurrent_scale = 0.5\n", f); fclose(f);
+    osd_theme_load(&t, "/tmp/_s.ini");
+    check("element scale * global scale", osd_theme_element_scale(&t, OSD_ELEM_CURRENT) > 0.99f
+                                       && osd_theme_element_scale(&t, OSD_ELEM_CURRENT) < 1.01f);
+    check("combined scale clamped to 4.0", osd_theme_element_scale(&t, OSD_ELEM_VOLTAGE) <= 4.0f);
+    check("untouched element keeps global only", osd_theme_element_scale(&t, OSD_ELEM_RSSI) > 1.99f);
+    f = fopen("/tmp/_s2.ini", "w");
+    fputs("[elements]\nvoltage_scale = banana\n", f); fclose(f);
+    osd_theme_defaults(&t); osd_theme_load(&t, "/tmp/_s2.ini");
+    check("bad scale keeps default", osd_theme_element_scale(&t, OSD_ELEM_VOLTAGE) > 0.99f);
+
     printf("\n%s (%d failure%s)\n", fails ? "FAILURES" : "ALL PASS", fails, fails==1?"":"s");
     return fails != 0;
 }

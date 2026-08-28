@@ -24,6 +24,7 @@ typedef struct {
 
 	osd_mode_t mode;
 	float global_opacity; // 0..1, multiplies every widget's alpha
+	float global_scale;   // multiplies every widget's size
 
 	// palette
 	osd_color_t accent, warn, crit, good, threat;
@@ -43,6 +44,7 @@ typedef struct {
 	// per-element switches, indexed by osd_element_type_t
 	bool elem_enabled[OSD_ELEM_TYPE_COUNT];
 	float elem_opacity[OSD_ELEM_TYPE_COUNT];
+	float elem_scale[OSD_ELEM_TYPE_COUNT];
 } osd_theme_t;
 
 /// Fills `t` with the built-in "Tactical" theme. Always succeeds, so there is
@@ -60,5 +62,7 @@ bool osd_theme_reload_if_changed(osd_theme_t *t, const char *path);
 bool osd_theme_element_enabled(const osd_theme_t *t, osd_element_type_t type);
 /// Combined per-element and global opacity, clamped to 0..1.
 float osd_theme_element_opacity(const osd_theme_t *t, osd_element_type_t type);
+/// Combined per-element and global size multiplier, clamped to a usable range.
+float osd_theme_element_scale(const osd_theme_t *t, osd_element_type_t type);
 /// Applies an opacity factor to a colour's alpha channel.
 osd_color_t osd_theme_apply_opacity(osd_color_t c, float opacity);

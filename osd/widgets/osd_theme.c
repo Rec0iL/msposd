@@ -16,6 +16,7 @@ void osd_theme_defaults(osd_theme_t *t) {
 
 	t->mode = OSD_MODE_FANCY;
 	t->global_opacity = 1.0f;
+	t->global_scale = 1.0f;
 
 	t->accent = OSD_ARGB(0xFF, 0x00, 0xE5, 0xFF);
 	t->warn = OSD_ARGB(0xFF, 0xFF, 0xB3, 0x00);
@@ -51,6 +52,7 @@ void osd_theme_defaults(osd_theme_t *t) {
 	for (int i = 0; i < OSD_ELEM_TYPE_COUNT; i++) {
 		t->elem_enabled[i] = true;
 		t->elem_opacity[i] = 1.0f;
+		t->elem_scale[i] = 1.0f;
 	}
 	// Lat/lon default off: on their own they are just numbers, and they are
 	// reserved for defining the map rectangle.
@@ -128,6 +130,20 @@ static int element_index(const char *name) {
 	return -1;
 }
 
+// Returns the element index for a key like "voltage_scale", or -1.
+static int strip_suffix_index(const char *key, const char *suffix) {
+	size_t klen = strlen(key), slen = strlen(suffix);
+	if (klen <= slen || strcasecmp(key + klen - slen, suffix) != 0)
+		return -1;
+	char base[32];
+	size_t n = klen - slen;
+	if (n >= sizeof(base))
+		return -1;
+	memcpy(base, key, n);
+	base[n] = '\0';
+	return element_index(base);
+}
+
 static void apply_kv(osd_theme_t *t, const char *section, const char *key, const char *val) {
 	float f;
 	bool b;
@@ -140,6 +156,8 @@ static void apply_kv(osd_theme_t *t, const char *section, const char *key, const
 				t->mode = OSD_MODE_FANCY;
 		} else if (!strcasecmp(key, "opacity") && parse_float(val, &f)) {
 			t->global_opacity = clampf(f, 0.0f, 1.0f);
+		} else if (!strcasecmp(key, "scale") && parse_float(val, &f)) {
+			t->global_scale = clampf(f, 0.3f, 4.0f);
 		}
 		return;
 	}
@@ -218,22 +236,22 @@ static void apply_kv(osd_theme_t *t, const char *section, const char *key, const
 	}
 
 	if (!strcasecmp(section, "elements")) {
-		const char *suffix = strstr(key, "_opacity");
-		if (suffix && suffix[8] == '\0') {
-			char base[32];
-			size_t n = (size_t)(suffix - key);
-			if (n >= sizeof(base))
-				return;
-			memcpy(base, key, n);
-			base[n] = '\0';
-			int idx = element_index(base);
-			if (idx >= 0 && parse_float(val, &f))
+		// "<type>", "<type>_opacity" and "<type>_scale"
+		int idx = strip_suffix_index(key, "_opacity");
+		if (idx >= 0) {
+			if (parse_float(val, &f))
 				t->elem_opacity[idx] = clampf(f, 0.0f, 1.0f);
-		} else {
-			int idx = element_index(key);
-			if (idx >= 0 && parse_bool(val, &b))
-				t->elem_enabled[idx] = b;
+			return;
 		}
+		idx = strip_suffix_index(key, "_scale");
+		if (idx >= 0) {
+			if (parse_float(val, &f))
+				t->elem_scale[idx] = clampf(f, 0.3f, 4.0f);
+			return;
+		}
+		idx = element_index(key);
+		if (idx >= 0 && parse_bool(val, &b))
+			t->elem_enabled[idx] = b;
 	}
 }
 
@@ -316,6 +334,12 @@ float osd_theme_element_opacity(const osd_theme_t *t, osd_element_type_t type) {
 	if (!t || type <= OSD_ELEM_NONE || type >= OSD_ELEM_TYPE_COUNT)
 		return 0.0f;
 	return clampf(t->elem_opacity[type] * t->global_opacity, 0.0f, 1.0f);
+}
+
+float osd_theme_element_scale(const osd_theme_t *t, osd_element_type_t type) {
+	if (!t || type <= OSD_ELEM_NONE || type >= OSD_ELEM_TYPE_COUNT)
+		return 1.0f;
+	return clampf(t->elem_scale[type] * t->global_scale, 0.3f, 4.0f);
 }
 
 osd_color_t osd_theme_apply_opacity(osd_color_t c, float opacity) {

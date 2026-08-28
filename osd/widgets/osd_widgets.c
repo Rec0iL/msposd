@@ -101,27 +101,40 @@ static void panel_path(osd_pointf_t *p, float x, float y, float w, float h, floa
 }
 
 static void draw_one(osd_surface_t *s, const osd_theme_t *th, osd_font_t *font,
-	const osd_element_t *e, float peak, float px, float py, float opacity) {
+	const osd_element_t *e, float peak, float px, float py, float opacity, float scale) {
 	char main_txt[24], sub_txt[16];
 	format_value(e, peak, main_txt, sizeof(main_txt), sub_txt, sizeof(sub_txt));
 
+	// Every dimension scales together, so a resized widget keeps its
+	// proportions rather than just growing its text out of the panel.
+	const float value_size = th->value_size * scale;
+	const float label_size = th->label_size * scale;
+	const float label_tracking = th->label_tracking * scale;
+	const float tab_h = th->tab_height * scale;
+	const float chamfer = th->chamfer * scale;
+	const float pad_x = th->pad_x * scale;
+	const float pad_y = th->pad_y * scale;
+	const float bar_h = th->bar_height * scale;
+	const float hatch_period = th->hatch_period * scale;
+
 	osd_text_metrics_t mm = {0}, sm = {0};
-	osd_text_measure(font, th->value_size, main_txt, &mm);
+	osd_text_measure(font, value_size, main_txt, &mm);
 	if (sub_txt[0])
-		osd_text_measure(font, th->value_size * 0.69f, sub_txt, &sm);
+		osd_text_measure(font, value_size * 0.69f, sub_txt, &sm);
 
 	// Panel width follows the measured value: "92" and "20A/67A" differ a lot,
 	// and a fixed width would clip one or leave the other floating.
 	float text_w = (float)(mm.width + sm.width);
-	float need = text_w + th->pad_x * 2.0f + 140.0f;
-	float w = need > th->panel_min_width ? need : th->panel_min_width;
+	float need = text_w + pad_x * 2.0f + 140.0f * scale;
+	float min_w = th->panel_min_width * scale;
+	float w = need > min_w ? need : min_w;
 
 	// Values with no meaningful range get no bar, so they must not reserve its
 	// height - otherwise the panel is mostly empty space.
 	float frac = fill_fraction(e, th, peak);
-	float h = th->panel_height;
+	float h = th->panel_height * scale;
 	if (frac < 0.0f)
-		h = th->tab_height + th->label_size + th->pad_y * 2.0f;
+		h = tab_h + label_size + pad_y * 2.0f;
 
 	osd_color_t accent = osd_theme_apply_opacity(state_color(e, th), opacity);
 	osd_color_t fill = osd_theme_apply_opacity(th->panel_fill, opacity);
@@ -135,37 +148,37 @@ static void draw_one(osd_surface_t *s, const osd_theme_t *th, osd_font_t *font,
 	osd_clear_rect(s, (int)px, (int)py, (int)w, (int)h);
 
 	osd_pointf_t poly[7];
-	panel_path(poly, px, py, w, h, th->tab_height, th->chamfer);
+	panel_path(poly, px, py, w, h, tab_h, chamfer);
 	osd_fill_poly(s, poly, 7, fill);
 	osd_stroke_poly(s, poly, 7, 1.5f, edge);
 
 	// accent corner marks
-	osd_draw_line(s, px, py + h - 18.0f, px, py + h, 2.5f, accent);
-	osd_draw_line(s, px, py + h, px + 26.0f, py + h, 2.5f, accent);
-	osd_draw_line(s, px + w, py + h - th->chamfer - 12.0f, px + w, py + h - th->chamfer, 2.5f, accent);
-	osd_draw_line(s, px + w, py + h - th->chamfer, px + w - th->chamfer, py + h, 2.5f, accent);
+	osd_draw_line(s, px, py + h - 18.0f * scale, px, py + h, 2.5f, accent);
+	osd_draw_line(s, px, py + h, px + 26.0f * scale, py + h, 2.5f, accent);
+	osd_draw_line(s, px + w, py + h - chamfer - 12.0f * scale, px + w, py + h - chamfer, 2.5f, accent);
+	osd_draw_line(s, px + w, py + h - chamfer, px + w - chamfer, py + h, 2.5f, accent);
 
 	// value, right aligned inside the tab
-	int right = (int)(px + w - th->pad_x);
-	int baseline = (int)(py + th->tab_height * 0.75f);
+	int right = (int)(px + w - pad_x);
+	int baseline = (int)(py + tab_h * 0.75f);
 	if (sub_txt[0]) {
 		int x0 = right - mm.width - sm.width;
-		osd_text_draw(s, font, th->value_size, x0, baseline, main_txt, accent);
-		osd_text_draw(s, font, th->value_size * 0.69f, x0 + mm.width, baseline, sub_txt, peakc);
+		osd_text_draw(s, font, value_size, x0, baseline, main_txt, accent);
+		osd_text_draw(s, font, value_size * 0.69f, x0 + mm.width, baseline, sub_txt, peakc);
 	} else {
-		osd_text_draw(s, font, th->value_size, right - mm.width, baseline, main_txt, accent);
+		osd_text_draw(s, font, value_size, right - mm.width, baseline, main_txt, accent);
 	}
 
 	// label
-	osd_text_draw_tracked(s, font, th->label_size, (int)(px + th->pad_x),
-		(int)(py + th->tab_height + th->label_size + 12.0f), label_for(e), th->label_tracking, label);
+	osd_text_draw_tracked(s, font, label_size, (int)(px + pad_x),
+		(int)(py + tab_h + label_size + 12.0f * scale), label_for(e), label_tracking, label);
 
 	// bar
 	if (frac >= 0.0f) {
-		int bx = (int)(px + th->pad_x);
-		int by = (int)(py + h - th->pad_y - th->bar_height);
-		int bw = (int)(w - th->pad_x * 2.0f);
-		int bh = (int)th->bar_height;
+		int bx = (int)(px + pad_x);
+		int by = (int)(py + h - pad_y - bar_h);
+		int bw = (int)(w - pad_x * 2.0f);
+		int bh = (int)bar_h;
 		osd_fill_rect(s, bx, by, bw, bh, track);
 
 		int fw = (int)((float)bw * frac);
@@ -180,13 +193,13 @@ static void draw_one(osd_surface_t *s, const osd_theme_t *th, osd_font_t *font,
 					osd_theme_apply_opacity(th->crit, opacity)};
 				const float offs[4] = {0.0f, 0.45f, 0.72f, 1.0f};
 				osd_fill_rect_hatched_gradient(s, bx, by, fw, bh, bw, stops, offs, 4,
-					OSD_ARGB(0x8C, 0x04, 0x14, 0x0A), th->hatch_period, th->hatch_duty,
+					OSD_ARGB(0x8C, 0x04, 0x14, 0x0A), hatch_period, th->hatch_duty,
 					th->hatch_slant);
 				osd_draw_line(s, (float)(bx + bw), (float)by - 4.0f, (float)(bx + bw),
 					(float)(by + bh + 4.0f), 2.0f, peakc);
 			} else {
 				osd_fill_rect_hatched(s, bx, by, fw, bh, accent,
-					OSD_ARGB(0x8C, 0x0B, 0x1A, 0x24), th->hatch_period, th->hatch_duty,
+					OSD_ARGB(0x8C, 0x0B, 0x1A, 0x24), hatch_period, th->hatch_duty,
 					th->hatch_slant);
 			}
 		}
@@ -218,7 +231,8 @@ int osd_widgets_draw_all(osd_surface_t *s, const osd_theme_t *th, osd_font_t *fo
 
 		float px = (float)(grid->off_x + e->col * grid->cell_w);
 		float py = (float)(grid->off_y + e->row * grid->cell_h);
-		draw_one(s, th, font, e, st->current_peak, px, py, opacity);
+		float scale = osd_theme_element_scale(th, e->type);
+		draw_one(s, th, font, e, st->current_peak, px, py, opacity, scale);
 		drawn++;
 	}
 	return drawn;

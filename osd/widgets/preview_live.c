@@ -46,6 +46,11 @@ int main(void){
     osd_widgets_update_arm(&st,true);
     st.current_peak = 67.0f;                    // as if we punched out earlier
 
+    // show the size slider: same voltage element at 0.7x, 1.0x, 1.4x
+    th.elem_scale[OSD_ELEM_VOLTAGE] = 0.7f;
+    th.elem_scale[OSD_ELEM_CURRENT] = 1.0f;
+    th.elem_scale[OSD_ELEM_ALTITUDE] = 1.4f;
+    th.elem_scale[OSD_ELEM_RSSI] = 1.0f;
     osd_grid_t g = {CELL_W,CELL_H,8,0};
     int drawn = osd_widgets_draw_all(&s,&th,font,&st,els,n,&g);
     printf("drew %d widgets (peak %.0fA)\n", drawn, st.current_peak);
