@@ -29,18 +29,18 @@ void osd_theme_defaults(osd_theme_t *t) {
 	t->label = OSD_ARGB(0xFF, 0x4F, 0xA8, 0xC4);
 	t->peak = OSD_ARGB(0xFF, 0x8F, 0xD8, 0xEA);
 
-	t->panel_min_width = 340.0f;
-	t->panel_height = 150.0f;
-	t->tab_height = 48.0f;
-	t->chamfer = 20.0f;
-	t->pad_x = 20.0f;
-	t->pad_y = 18.0f;
-	t->bar_height = 28.0f;
-	t->value_size = 32.0f;
-	t->label_size = 13.0f;
+	t->panel_min_width = 250.0f;
+	t->panel_height = 104.0f;
+	t->tab_height = 36.0f;
+	t->chamfer = 14.0f;
+	t->pad_x = 13.0f;
+	t->pad_y = 11.0f;
+	t->bar_height = 16.0f;
+	t->value_size = 25.0f;
+	t->label_size = 11.0f;
 	t->label_tracking = 2.5f;
 
-	t->hatch_period = 9.0f;
+	t->hatch_period = 7.0f;
 	t->hatch_duty = 0.64f;
 	t->hatch_slant = -0.45f;
 
@@ -49,6 +49,23 @@ void osd_theme_defaults(osd_theme_t *t) {
 	t->cell_warn = 3.60f;
 	t->cell_crit = 3.40f;
 	t->element_hold_ms = 2000.0f;
+
+	t->map_enabled = true;
+	t->map_style = 2; // hybrid
+	t->map_zoom = 16;
+	t->map_opacity = 1.0f;
+	// "tactical": matches this theme's accent rather than msposd's stock green.
+	t->ahi_level_color = 6;    // cyan
+	t->ahi_moderate_color = 4; // yellow
+	t->ahi_steep_color = 1;    // red
+	t->ahi_line_color = 7;     // white
+	t->ahi_level_max = 2.0f;
+	t->ahi_moderate_max = 10.0f;
+	t->ahi_steep_thickness = 5;
+
+	t->map_max_w = 420;
+	t->map_max_h = 300;
+	snprintf(t->map_cache_dir, sizeof(t->map_cache_dir), "%s", "/tmp/msposd-tiles");
 
 	for (int i = 0; i < OSD_ELEM_TYPE_COUNT; i++) {
 		t->elem_enabled[i] = true;
@@ -114,6 +131,25 @@ static bool parse_bool(const char *v, bool *out) {
 		!strcasecmp(v, "no")) {
 		*out = false;
 		return true;
+	}
+	return false;
+}
+
+// Palette colour names, mirroring COLOR_* in bmp/bitmap.h. Named rather than
+// numeric so a theme reads as intent, and so a settings UI can offer a list.
+static bool parse_palette_color(const char *v, int *out) {
+	static const struct {
+		const char *name;
+		int idx;
+	} kNames[] = {{"red", 1}, {"green", 2}, {"blue", 3}, {"yellow", 4}, {"magenta", 5},
+		{"cyan", 6}, {"white", 7}, {"black", 8}, {"gray", 10}, {"grey", 10}, {NULL, 0}};
+	if (!v)
+		return false;
+	for (int i = 0; kNames[i].name; i++) {
+		if (!strcasecmp(v, kNames[i].name)) {
+			*out = kNames[i].idx;
+			return true;
+		}
 	}
 	return false;
 }
@@ -223,6 +259,72 @@ static void apply_kv(osd_theme_t *t, const char *section, const char *key, const
 			t->label = c;
 		else if (!strcasecmp(key, "peak"))
 			t->peak = c;
+		return;
+	}
+
+	if (!strcasecmp(section, "ahi")) {
+		int col;
+		if (!strcasecmp(key, "scheme")) {
+			// Presets, so the common choices are one word. Each still sets the
+			// same four colours, which "custom" then lets a theme override.
+			if (!strcasecmp(val, "classic")) { // msposd's original
+				t->ahi_level_color = 2;
+				t->ahi_moderate_color = 4;
+				t->ahi_steep_color = 1;
+				t->ahi_line_color = 7;
+			} else if (!strcasecmp(val, "tactical")) {
+				t->ahi_level_color = 6;
+				t->ahi_moderate_color = 4;
+				t->ahi_steep_color = 1;
+				t->ahi_line_color = 7;
+			} else if (!strcasecmp(val, "mono")) {
+				t->ahi_level_color = 7;
+				t->ahi_moderate_color = 7;
+				t->ahi_steep_color = 7;
+				t->ahi_line_color = 7;
+			} else if (!strcasecmp(val, "heat")) {
+				t->ahi_level_color = 6;
+				t->ahi_moderate_color = 5;
+				t->ahi_steep_color = 1;
+				t->ahi_line_color = 3;
+			}
+		} else if (!strcasecmp(key, "level_color") && parse_palette_color(val, &col))
+			t->ahi_level_color = col;
+		else if (!strcasecmp(key, "moderate_color") && parse_palette_color(val, &col))
+			t->ahi_moderate_color = col;
+		else if (!strcasecmp(key, "steep_color") && parse_palette_color(val, &col))
+			t->ahi_steep_color = col;
+		else if (!strcasecmp(key, "line_color") && parse_palette_color(val, &col))
+			t->ahi_line_color = col;
+		else if (!strcasecmp(key, "level_max") && parse_float(val, &f))
+			t->ahi_level_max = clampf(f, 0.0f, 90.0f);
+		else if (!strcasecmp(key, "moderate_max") && parse_float(val, &f))
+			t->ahi_moderate_max = clampf(f, 0.0f, 90.0f);
+		else if (!strcasecmp(key, "steep_thickness") && parse_float(val, &f))
+			t->ahi_steep_thickness = (int)clampf(f, 1.0f, 12.0f);
+		return;
+	}
+
+	if (!strcasecmp(section, "map")) {
+		if (!strcasecmp(key, "enabled") && parse_bool(val, &b))
+			t->map_enabled = b;
+		else if (!strcasecmp(key, "style")) {
+			if (!strcasecmp(val, "roads"))
+				t->map_style = 0;
+			else if (!strcasecmp(val, "satellite"))
+				t->map_style = 1;
+			else if (!strcasecmp(val, "hybrid"))
+				t->map_style = 2;
+		} else if (!strcasecmp(key, "zoom") && parse_float(val, &f))
+			t->map_zoom = (int)clampf(f, 1.0f, 19.0f);
+		else if (!strcasecmp(key, "opacity") && parse_float(val, &f))
+			t->map_opacity = clampf(f, 0.0f, 1.0f);
+		else if (!strcasecmp(key, "max_width") && parse_float(val, &f))
+			t->map_max_w = (int)clampf(f, 80.0f, 4096.0f);
+		else if (!strcasecmp(key, "max_height") && parse_float(val, &f))
+			t->map_max_h = (int)clampf(f, 60.0f, 2160.0f);
+		else if (!strcasecmp(key, "cache_dir"))
+			snprintf(t->map_cache_dir, sizeof(t->map_cache_dir), "%s", val);
 		return;
 	}
 

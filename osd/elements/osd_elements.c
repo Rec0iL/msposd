@@ -232,6 +232,27 @@ const char *osd_element_type_name(osd_element_type_t type) {
 	}
 }
 
+// INAV titles its post-disarm page "*** STATS ***" (or "*** STATS 1/2 -> ***").
+// Betaflight uses a similar banner. Matching the banner is enough: it appears
+// only on that page, and only while the aircraft is disarmed.
+bool osd_elements_is_summary_screen(osd_glyph_getter get, void *ctx, int cols, int rows) {
+	if (!get)
+		return false;
+
+	for (int row = 0; row < rows; row++) {
+		char line[80];
+		int n = 0;
+		for (int c = 0; c < cols && n < (int)sizeof(line) - 1; c++) {
+			uint16_t g = get(c, row, ctx);
+			line[n++] = (g >= 0x20 && g < 0x7F) ? (char)g : ' ';
+		}
+		line[n] = '\0';
+		if (strstr(line, "STATS") && (strstr(line, "***") || strstr(line, "---")))
+			return true;
+	}
+	return false;
+}
+
 int osd_elements_scan(osd_glyph_getter get,
 	void *ctx,
 	int cols,

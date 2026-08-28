@@ -16,6 +16,10 @@ typedef struct {
 	// Cell count inferred from pack voltage, so a percentage can be shown
 	// without the user configuring anything. 0 until a battery is seen.
 	int cell_count;
+	float heading_deg; // aircraft heading, for the map marker
+	// Launch point, captured at arming like the flight controller does.
+	bool home_valid;
+	double home_lat, home_lon;
 	bool prev_armed;
 	int overlap_warnings; // panels that had to be pushed clear, for logging
 

@@ -72,3 +72,8 @@ int osd_elements_scan(osd_glyph_getter get,
 	int max_out);
 
 const char *osd_element_type_name(osd_element_type_t type);
+
+/// True when the flight controller has taken over the screen with its
+/// post-flight summary. That page is a dense full-screen table with its own
+/// layout, so widgets must stand aside and let the original text through.
+bool osd_elements_is_summary_screen(osd_glyph_getter get, void *ctx, int cols, int rows);

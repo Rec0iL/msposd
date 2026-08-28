@@ -47,6 +47,34 @@ typedef struct {
 	// exactly when the reading matters most.
 	float element_hold_ms;
 
+	// Map. The rectangle is defined by where the latitude and longitude
+	// elements were placed on the flight controller: latitude marks the
+	// top-left corner, longitude the bottom-right.
+	bool map_enabled;
+	int map_style; // osd_map_style_t
+	int map_zoom;
+	float map_opacity;
+	// Upper bound on the rectangle the elements span. Placing latitude and
+	// longitude far apart would otherwise cover most of the video, which is
+	// unflyable - a minimap is the point.
+	int map_max_w, map_max_h;
+	char map_cache_dir[256];
+
+	// Artificial horizon. Colouring stays pitch-based - level, moderate and
+	// steep read differently at a glance, which is the point of the thing - but
+	// which colours those are comes from the theme.
+	//
+	// These are indices into msposd's drawing palette, not RGBA: the AHI is
+	// drawn through the same fixed colour table the glyph layer uses. Values
+	// mirror COLOR_* in bmp/bitmap.h.
+	int ahi_level_color;    // |pitch| below ahi_level_max
+	int ahi_moderate_color; // |pitch| below ahi_moderate_max
+	int ahi_steep_color;    // beyond that
+	int ahi_line_color;     // the ladder segments either side of centre
+	float ahi_level_max;    // degrees
+	float ahi_moderate_max; // degrees
+	int ahi_steep_thickness;
+
 	// per-element switches, indexed by osd_element_type_t
 	bool elem_enabled[OSD_ELEM_TYPE_COUNT];
 	float elem_opacity[OSD_ELEM_TYPE_COUNT];

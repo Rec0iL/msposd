@@ -944,6 +944,8 @@ static void widgets_sync_config() {
 		osd_theme_defaults(&osd_theme);
 		osd_widgets_state_init(&osd_widget_state);
 		osd_theme_load(&osd_theme, OSD_THEME_PATH); // absent file just keeps defaults
+		if (osd_theme.map_enabled)
+			osd_tiles_init(osd_theme.map_cache_dir);
 		osd_widgets_ready = true;
 		changed = true;
 	} else if (osd_theme_reload_if_changed(&osd_theme, OSD_THEME_PATH)) {
@@ -1086,28 +1088,59 @@ BITMAP bmpBuff;
 // screen beside the widget that replaced them.
 static void widget_cell_rect(int col, int row, int span, void *ctx, int *x, int *y, int *w, int *h) {
 	(void)ctx;
-	const int nw = current_display_info.font_width;   // 36
-	const int nh = current_display_info.font_height;  // 54
+	const int nw = current_display_info.font_width;  // 36
+	const int nh = current_display_info.font_height; // 54
 	const int sw = 24, sh = 36;
 
-	bool small = (matrix_size > 10 && bmpFntSmall.u32Width > 0) && (row > 1 && row < 18) &&
-				 (row != 9 && row != 10) && (col < 20 || col > 32);
+	// Union of the individual cells, because a span can straddle the boundary
+	// between the two glyph sizes. Convert2SmallGlyph() uses the small font only
+	// for columns <20 or >32, so e.g. a 10-cell longitude starting at column 12
+	// has its last two cells drawn with the *normal* font at a quite different
+	// position. Choosing one size from the first cell left those cells
+	// uncleared, so the tail of the value stayed on screen.
+	int x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+	bool first = true;
 
-	if (!small) {
-		*x = X_OFFSET + col * nw;
-		*y = row * nh;
-		*w = span * nw;
-		*h = nh;
-		return;
+	for (int i = 0; i < (span < 1 ? 1 : span); i++) {
+		int c = col + i;
+		bool small = (matrix_size > 10 && bmpFntSmall.u32Width > 0) && (row > 1 && row < 18) &&
+					 (row != 9 && row != 10) && (c < 20 || c > 32);
+
+		int cx, cy, cw, chh;
+		if (small) {
+			cx = (c > 32) ? (52 * nw - (52 - c) * sw) : (c * sw);
+			cy = (row > 10) ? (20 * nh - 2 * (nh - sh) - (20 - row) * sh) : (2 * (nh - sh) + row * sh);
+			cw = sw;
+			chh = sh;
+		} else {
+			cx = X_OFFSET + c * nw;
+			cy = row * nh;
+			cw = nw;
+			chh = nh;
+		}
+
+		if (first) {
+			x0 = cx;
+			y0 = cy;
+			x1 = cx + cw;
+			y1 = cy + chh;
+			first = false;
+		} else {
+			if (cx < x0)
+				x0 = cx;
+			if (cy < y0)
+				y0 = cy;
+			if (cx + cw > x1)
+				x1 = cx + cw;
+			if (cy + chh > y1)
+				y1 = cy + chh;
+		}
 	}
 
-	int x0 = (col > 32) ? (52 * nw - (52 - col) * sw) : (col * sw);
-	int last = col + span - 1;
-	int x1 = (last > 32) ? (52 * nw - (52 - last) * sw) : (last * sw);
 	*x = x0;
-	*w = (x1 + sw) - x0;
-	*y = (row > 10) ? (20 * nh - 2 * (nh - sh) - (20 - row) * sh) : (2 * (nh - sh) + row * sh);
-	*h = sh;
+	*y = y0;
+	*w = x1 - x0;
+	*h = y1 - y0;
 }
 
 // Draws widgets over the glyph layer. Runs after the characters are composed so
@@ -1121,12 +1154,26 @@ static void draw_widgets_overlay() {
 	if (osd_theme.mode != OSD_MODE_FANCY || !osd_widget_font)
 		return;
 
+	// After disarm the flight controller replaces the screen with its flight
+	// summary. That page is a dense table of its own, so drawing widgets over it
+	// would bury the numbers the pilot actually wants. Stand aside until it goes.
+	if (osd_elements_is_summary_screen(element_glyph_getter, NULL, MAX_OSD_WIDTH, MAX_OSD_HEIGHT)) {
+		static bool announced = false;
+		if (verbose && !announced) {
+			announced = true;
+			printf("Flight summary screen detected - widgets suspended\n");
+		}
+		return;
+	}
+
 	// Widgets need per-pixel alpha. The camera-side I4/1555 formats cannot
 	// express a translucent backdrop, so there we leave the classic OSD alone.
 	if (PIXEL_FORMAT_DEFAULT != PIXEL_FORMAT_8888)
 		return;
 
 	osd_widgets_update_arm(&osd_widget_state, armed);
+	// last_heading is in degrees from MSP_ATTITUDE, used to orient the map marker
+	osd_widget_state.heading_deg = (float)last_heading;
 
 	osd_surface_t surf;
 	osd_surface_init(&surf, (uint8_t *)bmpBuff.pData, bmpBuff.u32Width, bmpBuff.u32Height,
@@ -1544,22 +1591,35 @@ static void draw_Ladder() {
 				rect_width = rect_width - spacing; // Length of a small line
 				// Calculate the starting X position for the first rectangle
 				int start_x = pos_x - width_ladder * 2.5 / 2;
-				int ahi_colour=COLOR_WHITE;
+				// Colouring stays pitch-based - level, moderate and steep must read
+				// differently at a glance - but the colours themselves come from
+				// the theme, so a scheme can match the rest of the OSD instead of
+				// being fixed green/yellow/red.
+				widgets_sync_config();
+				const int c_level = osd_theme.ahi_level_color;
+				const int c_moderate = osd_theme.ahi_moderate_color;
+				const int c_steep = osd_theme.ahi_steep_color;
+				const int c_line = osd_theme.ahi_line_color;
+				// thresholds are held in degrees; pitch is decidegrees
+				const int lvl = (int)(osd_theme.ahi_level_max * 10.0f);
+				const int mod = (int)(osd_theme.ahi_moderate_max * 10.0f);
+
+				int ahi_colour = c_line;
 				// Draw 6 rectangles in a line
 				for (int i = 0; i < fragments; i++) {
 					// Calculate the X position for the current rectangle
 					int rect_x = start_x + i * (rect_width + spacing) + spacing / 2;
 
 					int ahi_thickness = 3;
-					int ahi_line_color = COLOR_WHITE;
+					int ahi_line_color = c_line;
 					if ((i == 2 || i == 3)) {
-						if (abs(last_pitch) < 20)
-							ahi_colour = COLOR_GREEN;
-						else if (abs(last_pitch) <= 100)
-							ahi_colour = COLOR_YELLOW;
-						else if (abs(last_pitch) > 100) {
-							ahi_colour = COLOR_RED;
-							ahi_thickness = 5;
+						if (abs(last_pitch) < lvl)
+							ahi_colour = c_level;
+						else if (abs(last_pitch) <= mod)
+							ahi_colour = c_moderate;
+						else {
+							ahi_colour = c_steep;
+							ahi_thickness = osd_theme.ahi_steep_thickness;
 						}
 						ahi_line_color = ahi_colour;
 					}

@@ -24,7 +24,8 @@ int main(void) {
     check("shipped: panel_fill keeps its alpha", OSD_A(t.panel_fill) == 0xD6);
     check("shipped: 6-digit colour gets opaque alpha", OSD_A(t.accent) == 0xFF);
     check("shipped: inline comment stripped from value", t.hatch_slant < -0.4f && t.hatch_slant > -0.5f);
-    check("shipped: latitude disabled", !t.elem_enabled[OSD_ELEM_LATITUDE]);
+    // lat/lon are enabled now: they drive the map rather than drawing value panels
+    check("shipped: latitude enabled for the map", t.elem_enabled[OSD_ELEM_LATITUDE]);
 
     // mode switch
     FILE *f = fopen("/tmp/_m.ini", "w");
@@ -40,7 +41,7 @@ int main(void) {
           "[nonsense]\nfoo = bar\n[elements]\nvoltage = maybe\n", f); fclose(f);
     osd_theme_load(&t, "/tmp/_b.ini");
     check("bad colour keeps default", t.accent == OSD_ARGB(0xFF,0x00,0xE5,0xFF));
-    check("bad float keeps default", t.value_size > 31.9f && t.value_size < 32.1f);
+    check("bad float keeps default", t.value_size > 24.9f && t.value_size < 25.1f);
     check("bad bool keeps default", t.elem_enabled[OSD_ELEM_VOLTAGE]);
     check("unknown section ignored", true);
 
