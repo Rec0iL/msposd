@@ -19,6 +19,11 @@
 // parser has to tolerate reading one mid-write - it fills a local copy and only
 // commits it if the file held enough to be worth showing.
 
+const char *osd_link_default_path(void) {
+	const char *env = getenv("MSPOSD_LINK_STATS");
+	return (env && env[0]) ? env : "/tmp/msposd-link.ini";
+}
+
 static void trim(char *s) {
 	char *p = s;
 	while (*p == ' ' || *p == '\t')

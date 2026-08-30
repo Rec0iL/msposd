@@ -82,9 +82,22 @@ to inherit. Everything about placement therefore comes from the theme's
 
 The numbers arrive through a small ini the ground station writes — the same seam
 the theme itself uses, front end writes and we poll. That keeps msposd from
-having to know anything about wfb-ng, APFPV, or whatever comes next: a station
-that has not been taught to write the file leaves `source` empty and the widget
-does not appear.
+having to know anything about wfb-ng, APFPV, or whatever comes next.
+
+Nothing has to be configured for the two to find each other. An empty `source`
+means "wherever ground stations put it", and every writer resolves that the same
+way msposd does: `$MSPOSD_LINK_STATS` if set, otherwise `/tmp/msposd-link.ini`.
+
+Deliberately *not* `$XDG_RUNTIME_DIR`, tempting as it is: msposd is often started
+from a service where it is unset while the ground station runs in a user session
+where it is not, and the two would then quietly disagree about the path. A rule
+that can resolve differently in two processes is worse than a plain one.
+
+That rule now exists in three repositories with nothing at build time connecting
+them, which is exactly the sort of thing that drifts — and if it drifts the
+widget goes blank with no error anywhere. Aviateur's
+`src/gui/test_osd_link_writer.cpp` links all three and asserts they agree, with
+and without the override.
 
 Two things the parser has to survive, both of which a reader polling five times
 a second will hit sooner or later:

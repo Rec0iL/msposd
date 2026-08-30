@@ -71,6 +71,17 @@ static int antenna_count(const osd_link_stats_t *s) {
 	return n < 0 ? 0 : n;
 }
 
+// The WiFi driver behind APFPV reports no SNR at all, so the row would be blank
+// space on every frame. Reserved only when something actually fills it.
+static bool has_snr(const osd_link_stats_t *s) {
+	if (!s)
+		return false;
+	for (int i = 0; i < OSD_LINK_MAX_ANTENNAS; i++)
+		if (s->snr_valid[i])
+			return true;
+	return false;
+}
+
 static bool has_footer(const osd_link_stats_t *s) {
 	return s && (s->quality_pct >= 0.0f || s->loss_pct >= 0.0f || s->bitrate_mbps >= 0.0f);
 }
@@ -88,7 +99,8 @@ void osd_link_measure(
 		// widget does not also have to be a tall one.
 		const int cols = n > 0 ? n : 1;
 		*out_w = ((float)cols * LINK_COL_W + 24.0f) * k;
-		*out_h = (LINK_HEAD_H + LINK_H_CAP + LINK_H_VAL + LINK_H_BAR + LINK_H_SNR + foot) * k;
+		const float snr = has_snr(s) ? LINK_H_SNR : 0.0f;
+		*out_h = (LINK_HEAD_H + LINK_H_CAP + LINK_H_VAL + LINK_H_BAR + snr + foot) * k;
 	} else {
 		*out_w = LINK_VERT_W * k;
 		*out_h = (LINK_HEAD_H + (float)n * LINK_ROW_H + foot + 8.0f) * k;

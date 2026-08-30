@@ -54,6 +54,18 @@ typedef struct {
 	uint64_t updated_ms; // our clock, not the writer's
 } osd_link_stats_t;
 
+/// Where the ground station is expected to publish, when the theme does not say.
+///
+/// One fixed rule, deliberately: `$MSPOSD_LINK_STATS` if set, otherwise
+/// /tmp/msposd-link.ini. Every writer resolves it the same way, so a ground
+/// station and msposd agree without either being configured.
+///
+/// Not $XDG_RUNTIME_DIR, tempting as that is: msposd is often started from a
+/// service where it is unset while the ground station runs in a user session
+/// where it is not, and the two would then quietly disagree about the path. A
+/// rule that can resolve differently in two processes is worse than a plain one.
+const char *osd_link_default_path(void);
+
 /// Reads the ini the ground station writes. Returns false if the file cannot be
 /// read or holds nothing usable, leaving `out` untouched so a truncated write -
 /// which is what a reader catches sooner or later at ten updates a second - does
