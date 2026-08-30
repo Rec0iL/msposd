@@ -8,6 +8,7 @@
 
 #include "../elements/osd_elements.h"
 #include "osd_heading.h"
+#include "osd_link.h"
 #include "osd_map.h"
 #include "osd_paint.h"
 #include "osd_text.h"
@@ -41,6 +42,11 @@ typedef struct {
 	// around is unusable - but a compass that lags a turn by a second is
 	// actively misleading, so the two cannot share one filter.
 	osd_heading_smooth_t heading_smooth;
+	// Ground-side link statistics, and when we last went looking for them. The
+	// file is rewritten several times a second; re-reading it at frame rate
+	// would be a syscall per frame for numbers that have not changed.
+	osd_link_stats_t link;
+	uint64_t link_polled_ms;
 	// Launch point, captured at arming like the flight controller does.
 	bool home_valid;
 	double home_lat, home_lon;

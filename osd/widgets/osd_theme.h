@@ -123,6 +123,24 @@ typedef struct {
 	bool heading_outline;
 	float heading_outline_width;
 
+	// Ground-side link statistics. Not a flight controller element - wfb-ng and
+	// APFPV live on this side of the link - so there is no position on the glyph
+	// grid to inherit and everything about placement is set here.
+	bool link_enabled;
+	int link_style;   // 0 vertical, 1 horizontal
+	float link_x;     // percent of the screen, of the widget's top-left corner
+	float link_y;
+	float link_scale;
+	float link_opacity;
+	// Where the ground station writes its stats. Empty disables the widget as
+	// surely as link_enabled = no, and is the default: a station that has not
+	// been taught to write the file shows nothing rather than an empty panel.
+	char link_source[256];
+	// How long the last numbers stay on screen once the writer stops. Past this
+	// the widget says so, rather than showing a dead link's final reading for
+	// the rest of the flight.
+	float link_hold_ms;
+
 	// per-element switches, indexed by osd_element_type_t
 	bool elem_enabled[OSD_ELEM_TYPE_COUNT];
 	float elem_opacity[OSD_ELEM_TYPE_COUNT];

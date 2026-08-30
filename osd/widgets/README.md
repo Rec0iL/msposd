@@ -44,7 +44,7 @@ turns every widget off in one key.
 gcc -Wall -I. -I bmp/lib -I osd/widgets -D_GNU_SOURCE -o test_layout \
     osd/widgets/test_layout.c osd/elements/osd_elements.c osd/widgets/osd_paint.c \
     osd/widgets/osd_text.c osd/widgets/osd_theme.c osd/widgets/osd_widgets.c \
-    osd/widgets/osd_map.c osd/widgets/osd_tiles.c osd/widgets/osd_heading.c \
+    osd/widgets/osd_map.c osd/widgets/osd_tiles.c osd/widgets/osd_heading.c osd/widgets/osd_link.c \
     bmp/lib/schrift.c \
     libpng/lodepng.c -lm -lpthread
 ./test_layout    # run from the repo root, it loads the theme font
@@ -70,6 +70,30 @@ controller keeps still, so the key survives a reading going from 99 to 100.
 Callers ask `osd_widgets_placement()` where something ended up rather than
 indexing by type. Where only one instance can mean anything - the map's corner
 coordinates, the fix the home bearing is measured from - the first live one wins.
+
+## The one widget the flight controller knows nothing about
+
+wfb-ng and APFPV run on the ground station. msposd only ever sees MSP coming
+*down* from the air unit, so there is no element on the glyph grid to anchor a
+link-stats widget to, and no position the pilot chose on the flight controller
+to inherit. Everything about placement therefore comes from the theme's
+`[link]` block, in percent of the screen so a layout survives moving between a
+720p and a 1080p ground station.
+
+The numbers arrive through a small ini the ground station writes — the same seam
+the theme itself uses, front end writes and we poll. That keeps msposd from
+having to know anything about wfb-ng, APFPV, or whatever comes next: a station
+that has not been taught to write the file leaves `source` empty and the widget
+does not appear.
+
+Two things the parser has to survive, both of which a reader polling five times
+a second will hit sooner or later:
+
+- **A file caught mid-write.** It fills a local copy and commits only if the
+  file held something usable, so a truncated read keeps the last good numbers
+  instead of blanking the widget for a frame.
+- **A writer that stops.** Past `hold_ms` the widget says so rather than showing
+  a dead link's final reading for the rest of the flight.
 
 ## End-to-end check
 

@@ -28,6 +28,15 @@ void osd_theme_defaults(osd_theme_t *t) {
 	t->heading_outline = true;
 	t->heading_outline_width = 2.0f;
 
+	t->link_enabled = true;
+	t->link_style = 0; // vertical
+	t->link_x = 2.0f;
+	t->link_y = 34.0f;
+	t->link_scale = 1.0f;
+	t->link_opacity = 1.0f;
+	t->link_source[0] = '\0';
+	t->link_hold_ms = 3000.0f;
+
 	t->accent = OSD_ARGB(0xFF, 0x00, 0xE5, 0xFF);
 	t->warn = OSD_ARGB(0xFF, 0xFF, 0xB3, 0x00);
 	t->crit = OSD_ARGB(0xFF, 0xFF, 0x3B, 0x30);
@@ -364,6 +373,29 @@ static void apply_kv(osd_theme_t *t, const char *section, const char *key, const
 		else if (!strcasecmp(key, "lens") && parse_float(val, &f))
 			// Below ~0.3 the centre is stretched past the point of reading.
 			t->heading_lens = clampf(f, 0.3f, 1.0f);
+		return;
+	}
+
+	if (!strcasecmp(section, "link")) {
+		if (!strcasecmp(key, "enabled") && parse_bool(val, &b))
+			t->link_enabled = b;
+		else if (!strcasecmp(key, "style")) {
+			if (!strcasecmp(val, "vertical"))
+				t->link_style = 0;
+			else if (!strcasecmp(val, "horizontal"))
+				t->link_style = 1;
+		} else if (!strcasecmp(key, "x") && parse_float(val, &f))
+			t->link_x = clampf(f, 0.0f, 100.0f);
+		else if (!strcasecmp(key, "y") && parse_float(val, &f))
+			t->link_y = clampf(f, 0.0f, 100.0f);
+		else if (!strcasecmp(key, "scale") && parse_float(val, &f))
+			t->link_scale = clampf(f, 0.3f, 4.0f);
+		else if (!strcasecmp(key, "opacity") && parse_float(val, &f))
+			t->link_opacity = clampf(f, 0.0f, 1.0f);
+		else if (!strcasecmp(key, "source"))
+			snprintf(t->link_source, sizeof(t->link_source), "%s", val);
+		else if (!strcasecmp(key, "hold_ms") && parse_float(val, &f))
+			t->link_hold_ms = clampf(f, 200.0f, 60000.0f);
 		return;
 	}
 

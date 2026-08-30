@@ -1250,6 +1250,66 @@ int osd_widgets_draw_all(osd_surface_t *s, const osd_theme_t *th, osd_font_t *fo
 		break;
 	}
 
+	// Link statistics, from the file the ground station writes. Placed from the
+	// theme rather than from the grid: wfb-ng and APFPV are on this side of the
+	// link, so the flight controller has never heard of them and there is no
+	// element to anchor to.
+	bool have_link = false;
+	float link_x = 0.0f, link_y = 0.0f, link_w = 0.0f, link_h = 0.0f;
+	osd_link_params_t lp = {0};
+	bool link_stale = false;
+	if (th->link_enabled && th->link_source[0] && th->link_opacity > 0.01f) {
+		// The poll clock advances whether or not the read succeeded. Advancing it
+		// only on success meant a missing file was reopened every single frame,
+		// which is the one case where it definitely will not appear.
+		if (st->link_polled_ms == 0 || now_ms - st->link_polled_ms >= 200) {
+			st->link_polled_ms = now_ms;
+			osd_link_stats_load(th->link_source, &st->link, now_ms);
+		}
+		if (st->link.valid) {
+			link_stale = osd_link_stats_stale(&st->link, now_ms, th->link_hold_ms);
+			const float op = th->link_opacity * th->global_opacity;
+			lp.style = (osd_link_style_t)th->link_style;
+			lp.scale = th->link_scale * th->global_scale;
+			lp.accent = osd_theme_apply_opacity(th->accent, op);
+			lp.label = osd_theme_apply_opacity(th->label, op);
+			lp.good = osd_theme_apply_opacity(th->good, op);
+			lp.warn = osd_theme_apply_opacity(th->warn, op);
+			lp.crit = osd_theme_apply_opacity(th->crit, op);
+			lp.fill = osd_theme_apply_opacity(th->panel_fill, op);
+			lp.edge = osd_theme_apply_opacity(th->panel_edge, op);
+			lp.track = osd_theme_apply_opacity(th->track, op);
+			lp.opacity = op;
+			lp.outline = th->text_outline;
+			lp.outline_color = th->text_outline_color;
+			lp.outline_px = (float)th->text_outline_width + 1.0f;
+			lp.pad_x = th->pad_x;
+			lp.pad_y = th->pad_y;
+			lp.chamfer = th->chamfer;
+			lp.bar_height = th->bar_height;
+			lp.value_size = th->value_size;
+			lp.label_size = th->label_size;
+			lp.label_tracking = th->label_tracking;
+
+			osd_link_measure(&lp, &st->link, &link_w, &link_h);
+			// The theme places the top-left corner as a fraction of the screen,
+			// so a layout carries over between a 720p and a 1080p ground
+			// station. Clamped, because 100% would put it entirely off-screen.
+			link_x = (float)s->width * th->link_x * 0.01f;
+			link_y = (float)s->height * th->link_y * 0.01f;
+			if (link_x + link_w > (float)s->width)
+				link_x = (float)s->width - link_w;
+			if (link_y + link_h > (float)s->height)
+				link_y = (float)s->height - link_h;
+			if (link_x < 0.0f)
+				link_x = 0.0f;
+			if (link_y < 0.0f)
+				link_y = 0.0f;
+			osd_link_draw(s, font, link_x, link_y, &lp, &st->link, link_stale);
+			have_link = true;
+		}
+	}
+
 	if (have_heading) {
 		// A compass that lags a turn is worse than no compass, so this is eased
 		// on its own short constant rather than the map's - see the field's
@@ -1313,10 +1373,10 @@ int osd_widgets_draw_all(osd_surface_t *s, const osd_theme_t *th, osd_font_t *fo
 			st->slots[i].layout_valid = false;
 	}
 
-	// +2 for the two seeded rectangles: the map and the compass, neither of
-	// which is a panel but both of which panels must avoid.
-	float placed_x[OSD_WIDGET_SLOTS + 2], placed_y[OSD_WIDGET_SLOTS + 2];
-	float placed_w[OSD_WIDGET_SLOTS + 2], placed_h[OSD_WIDGET_SLOTS + 2];
+	// +3 for the seeded rectangles: the map, the compass and the link panel.
+	// None is a panel, but panels must keep clear of all three.
+	float placed_x[OSD_WIDGET_SLOTS + 3], placed_y[OSD_WIDGET_SLOTS + 3];
+	float placed_w[OSD_WIDGET_SLOTS + 3], placed_h[OSD_WIDGET_SLOTS + 3];
 	int placed = 0;
 	int drawn = 0;
 
@@ -1336,6 +1396,14 @@ int osd_widgets_draw_all(osd_surface_t *s, const osd_theme_t *th, osd_font_t *fo
 	if (have_heading) {
 		osd_widgets_heading_box(th, hdg_cx, hdg_cy, &placed_x[placed], &placed_y[placed], &placed_w[placed],
 			&placed_h[placed]);
+		placed++;
+	}
+
+	if (have_link) {
+		placed_x[placed] = link_x;
+		placed_y[placed] = link_y;
+		placed_w[placed] = link_w;
+		placed_h[placed] = link_h;
 		placed++;
 	}
 

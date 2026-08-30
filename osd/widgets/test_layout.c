@@ -509,6 +509,130 @@ int main(void) {
 		check("duplicates: slots are reused, not grown", used == 2);
 	}
 
+	// --- link statistics: not a flight controller element at all.
+	//
+	// The numbers come from a file the ground station writes, and the widget is
+	// placed from the theme because there is nothing on the glyph grid to anchor
+	// to - wfb-ng and APFPV live on this side of the link.
+	{
+		char path[] = "/tmp/_msposd_link_test.ini";
+		FILE *f = fopen(path, "w");
+		fprintf(f, "; written by the ground station\n"
+				   "source = WFB-NG\n"
+				   "quality = 97\n"
+				   "loss = 0.4\n"
+				   "bitrate_mbps = 12.4\n"
+				   "ant0_rssi = -58   ; first antenna\n"
+				   "ant0_snr = 18\n"
+				   "ant1_rssi = -71\n"
+				   "ant1_snr = 11\n");
+		fclose(f);
+
+		osd_link_stats_t ls;
+		memset(&ls, 0, sizeof(ls));
+		check("link: stats file read", osd_link_stats_load(path, &ls, 1000));
+		check("link: source read", strcmp(ls.source, "WFB-NG") == 0);
+		check("link: two antennas", ls.antennas == 2);
+		check("link: rssi read past its comment", ls.rssi_valid[0] && ls.rssi_dbm[0] == -58);
+		check("link: snr read", ls.snr_valid[1] && ls.snr_db[1] == 11);
+		check("link: quality read", ls.quality_pct > 96.9f && ls.quality_pct < 97.1f);
+
+		// A reader polling ten times a second will catch a write in progress. That
+		// must keep the last good numbers rather than blanking the widget.
+		osd_link_stats_t before = ls;
+		f = fopen(path, "w");
+		fclose(f); // truncated to nothing, mid-rewrite
+		check("link: an empty file is refused", !osd_link_stats_load(path, &ls, 1100));
+		check("link: the last good stats survive it",
+			ls.rssi_dbm[0] == before.rssi_dbm[0] && ls.antennas == before.antennas);
+
+		// Missing entirely - a ground station that does not write the file.
+		remove(path);
+		check("link: a missing file is refused", !osd_link_stats_load(path, &ls, 1200));
+
+		// Stale once the writer stops.
+		check("link: fresh stats are not stale", !osd_link_stats_stale(&before, 1200, 3000.0f));
+		check("link: old stats go stale", osd_link_stats_stale(&before, 9000, 3000.0f));
+
+		// Both styles have to measure to something that fits on a 1080p screen
+		// with every antenna slot filled.
+		osd_link_params_t lp = {0};
+		lp.scale = 1.0f;
+		lp.pad_x = 13;
+		lp.pad_y = 11;
+		lp.chamfer = 14;
+		lp.bar_height = 16;
+		lp.value_size = 25;
+		lp.label_size = 11;
+		lp.label_tracking = 2.5f;
+		osd_link_stats_t full = before;
+		full.antennas = OSD_LINK_MAX_ANTENNAS;
+		float lw, lh;
+		lp.style = OSD_LINK_VERTICAL;
+		osd_link_measure(&lp, &full, &lw, &lh);
+		check("link: vertical fits at six antennas", lw < 1920.0f && lh < 1080.0f);
+		lp.style = OSD_LINK_HORIZONTAL;
+		osd_link_measure(&lp, &full, &lw, &lh);
+		check("link: horizontal fits at six antennas", lw < 1920.0f && lh < 1080.0f);
+	}
+
+	// The widget is placed from the theme, clamped into the viewport, and panels
+	// are pushed clear of it just as they are of the map.
+	{
+		char path[] = "/tmp/_msposd_link_place.ini";
+		FILE *f = fopen(path, "w");
+		fprintf(f, "source = WFB-NG\nant0_rssi = -58\nant0_snr = 18\n");
+		fclose(f);
+
+		osd_widget_state_t st;
+		osd_widgets_state_init(&st);
+		osd_theme_t lt = th;
+		lt.link_enabled = true;
+		lt.link_style = 0;
+		lt.link_scale = 1.0f;
+		lt.link_opacity = 1.0f;
+		snprintf(lt.link_source, sizeof(lt.link_source), "%s", path);
+		// Hard against the right edge, which must be pulled back rather than drawn
+		// off the side of the screen.
+		lt.link_x = 100.0f;
+		lt.link_y = 0.0f;
+
+		clear_grid();
+		put_trailing_at(1, 50, "1250", SYM_MAH);
+		osd_element_t els[32];
+		int n = osd_elements_scan(getter, NULL, COLS, ROWS, "INAV", els, 32);
+		osd_grid_t g = {CELL_W, CELL_H, 8, 0, NULL, NULL};
+		osd_surface_t s;
+		memset(buf, 0, (size_t)SURF_W * SURF_H * 4);
+		osd_surface_init(&s, buf, SURF_W, SURF_H, SURF_W * 4);
+		osd_widgets_draw_all(&s, &lt, font, &st, els, n, &g, 1000);
+
+		check("link: the stats were picked up", st.link.valid);
+
+		// Something was painted in the top-right corner.
+		int lit = 0;
+		for (int yy = 0; yy < 220; yy++)
+			for (int xx = SURF_W - 300; xx < SURF_W; xx++)
+				if (buf[((size_t)yy * SURF_W + xx) * 4 + 3] != 0)
+					lit++;
+		check("link: drawn inside the viewport", lit > 3000);
+
+		// And the panel that shares that corner was pushed clear.
+		float pxx, pyy, pww, phh;
+		const bool placed = osd_widgets_placement(&st, OSD_ELEM_MAH, &pxx, &pyy, &pww, &phh);
+		check("link: the panel beside it is placed", placed);
+		osd_link_params_t lp = {0};
+		lp.style = OSD_LINK_VERTICAL;
+		lp.scale = 1.0f;
+		float lw, lh;
+		osd_link_measure(&lp, &st.link, &lw, &lh);
+		const float lx = (float)SURF_W - lw;
+		const bool clear_of_it =
+			pxx + pww <= lx || lx + lw <= pxx || pyy + phh <= 0.0f || lh <= pyy;
+		check("link: the panel is pushed clear of it", placed && clear_of_it);
+		remove(path);
+	}
+
 	printf("\n%s (%d failures)\n", fails ? "FAILURES" : "ALL PASS", fails);
 	return fails ? 1 : 0;
 }
