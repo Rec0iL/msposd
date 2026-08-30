@@ -58,8 +58,9 @@ crossing no longer forces a full relayout.
 
 ## Themes
 
-Two ship: **Tactical**, the cyan one with the stepped and cut corners, and
-**Orchid**, violet and built entirely out of rectangles.
+**Tactical** is the cyan one with the stepped and cut corners. The **Minimal**
+family is square, compact and comes in seven palettes: orchid, red, teal, green,
+blue, orange and yellow.
 
 `panel_shape` is a shape rather than a set of numbers, which is the one thing
 worth knowing about it. The notch is a third of the way along the top edge with
@@ -68,10 +69,31 @@ zero, so a theme that wants clean rectangles switches the path. Setting it also
 squares off the corner marks, which would otherwise draw a diagonal across a
 square corner.
 
-What Orchid deliberately does *not* restyle is `good`, `warn` and `crit`. Those
-three are what a pilot reads out of the corner of an eye, and a palette is no
-reason for "turn back now" to be a different colour than it is everywhere else.
-Only the chrome — accent, label, plate, edge, track — goes violet.
+### Inheriting
+
+`minimal-orchid` is the base; the other six are a `[colors]` block and an
+`inherit` line each. A relative path is resolved against the file naming it,
+because a theme has no idea where msposd was started from, and `inherit` is
+pre-scanned rather than applied where it appears — otherwise a parent loaded
+mid-file would overwrite whatever the child had already set above it, and the
+key would only work on the first line.
+
+Chains stop at four deep. That is what keeps a theme that inherits itself from
+taking the OSD down mid-flight; a missing parent is survivable too, leaving the
+child's own values standing.
+
+### What a palette may not touch
+
+`good`, `warn` and `crit` stay as they are in every variant. Those three are
+what a pilot reads out of the corner of an eye, and a palette is no reason for
+"turn back now" to be a different colour than it is everywhere else.
+
+That is also why every variant's chrome is a *pale tint* of its hue rather than
+the hue itself. In the red, orange and yellow ones the theme colour and the
+colour that means "look at this" would otherwise be the same, and hue alone
+could not separate them — so a value is pale and an alarm is vivid. The theme
+tests measure the distance between each variant's accent and all three status
+colours, so a new palette cannot quietly break it.
 
 ## Two of the same kind on screen
 

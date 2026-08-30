@@ -3,6 +3,15 @@
 #include <string.h>
 
 static int fails = 0;
+// Rough perceptual distance - green weighted up, blue down - which is enough to
+// catch two colours that would read alike on a small panel over moving video.
+static bool colours_far_apart(uint32_t a, uint32_t b) {
+    const int dr = (int)OSD_R(a) - (int)OSD_R(b);
+    const int dg = (int)OSD_G(a) - (int)OSD_G(b);
+    const int db = (int)OSD_B(a) - (int)OSD_B(b);
+    return (dr * dr * 2 + dg * dg * 4 + db * db) > 9000;
+}
+
 static void check(const char *n, int c) {
     printf("  %-52s %s\n", n, c ? "PASS" : "FAIL");
     if (!c) fails++;
@@ -118,20 +127,65 @@ int main(void) {
     osd_theme_load(&t, "/tmp/_sh2.ini");
     check("an unknown shape is ignored", t.panel_shape == OSD_PANEL_SQUARE);
 
-    // And the shipped theme that uses it.
+    // --- inheritance. A variant should be a palette and nothing else.
+    f = fopen("/tmp/_base.ini", "w");
+    fputs("[theme]\npanel_shape = square\npanel_min_width = 111\n[colors]\naccent = 112233\n", f);
+    fclose(f);
+    f = fopen("/tmp/_child.ini", "w");
+    // The inherit line last on purpose: it is pre-scanned, so where it sits in
+    // the file must not decide whether the child's own values survive.
+    fputs("[colors]\naccent = AABBCC\n[theme]\ninherit = /tmp/_base.ini\n", f);
+    fclose(f);
+    osd_theme_defaults(&t);
+    osd_theme_load(&t, "/tmp/_child.ini");
+    check("inherited value came through", t.panel_min_width > 110.0f && t.panel_min_width < 112.0f);
+    check("child wins over the parent", OSD_R(t.accent) == 0xAA);
+    check("inherited shape came through", t.panel_shape == OSD_PANEL_SQUARE);
+
+    // A theme that inherits itself must not take the OSD down with it.
+    f = fopen("/tmp/_loop.ini", "w");
+    fputs("[theme]\ninherit = /tmp/_loop.ini\nname = Loop\n", f); fclose(f);
+    osd_theme_defaults(&t);
+    check("a self-inheriting theme still returns", osd_theme_load(&t, "/tmp/_loop.ini"));
+    check("and still applies its own keys", strcmp(t.name, "Loop") == 0);
+
+    // A parent that is not there leaves the child's own values standing.
+    f = fopen("/tmp/_orphan.ini", "w");
+    fputs("[theme]\ninherit = /tmp/_nope_nope.ini\nname = Orphan\n", f); fclose(f);
+    osd_theme_defaults(&t);
+    check("a missing parent is survivable", osd_theme_load(&t, "/tmp/_orphan.ini"));
+    check("the child still applied", strcmp(t.name, "Orphan") == 0);
+
+    // --- the shipped family. Each variant must inherit the layout and differ
+    // only in its palette, and its chrome must stay clear of the three colours
+    // that mean something.
     {
-        osd_theme_t orchid, base;
-        osd_theme_defaults(&orchid);
+        static const char *family[] = {"orchid", "red", "teal", "green", "blue", "orange",
+                                       "yellow"};
+        osd_theme_t base;
         osd_theme_defaults(&base);
-        check("orchid loads", osd_theme_load(&orchid, "themes/orchid/theme.ini"));
-        check("orchid is square", orchid.panel_shape == OSD_PANEL_SQUARE);
-        check("orchid hatching does not lean", orchid.hatch_slant == 0.0f);
-        check("orchid recoloured its chrome", orchid.accent != base.accent);
-        // The three status colours are deliberately left alone - they are what a
-        // pilot reads out of the corner of an eye, and a palette is no reason to
-        // make "turn back now" a different colour than everywhere else.
-        check("orchid keeps warn amber", OSD_R(orchid.warn) > 0xE0 && OSD_G(orchid.warn) > 0x90);
-        check("orchid keeps crit red", OSD_R(orchid.crit) > 0xE0 && OSD_G(orchid.crit) < 0x90);
+        for (unsigned i = 0; i < sizeof(family) / sizeof(family[0]); i++) {
+            char path[128], msg[160];
+            snprintf(path, sizeof(path), "themes/minimal-%s/theme.ini", family[i]);
+            osd_theme_t v;
+            osd_theme_defaults(&v);
+            snprintf(msg, sizeof(msg), "minimal-%s loads", family[i]);
+            check(msg, osd_theme_load(&v, path));
+            snprintf(msg, sizeof(msg), "minimal-%s inherits the layout", family[i]);
+            check(msg, v.panel_shape == OSD_PANEL_SQUARE && v.panel_min_width < 200.0f &&
+                           v.hatch_slant == 0.0f);
+            snprintf(msg, sizeof(msg), "minimal-%s has a palette of its own", family[i]);
+            check(msg, i == 0 || v.accent != base.accent);
+            // The reason the chrome is a pale tint rather than the hue itself:
+            // in the red, orange and yellow variants the theme colour and the
+            // colour that means "look at this" would otherwise be the same.
+            snprintf(msg, sizeof(msg), "minimal-%s keeps crit clear of its chrome", family[i]);
+            check(msg, colours_far_apart(v.accent, v.crit));
+            snprintf(msg, sizeof(msg), "minimal-%s keeps warn clear of its chrome", family[i]);
+            check(msg, colours_far_apart(v.accent, v.warn));
+            snprintf(msg, sizeof(msg), "minimal-%s keeps good clear of its chrome", family[i]);
+            check(msg, colours_far_apart(v.accent, v.good));
+        }
     }
 
     printf("\n%s (%d failure%s)\n", fails ? "FAILURES" : "ALL PASS", fails, fails==1?"":"s");

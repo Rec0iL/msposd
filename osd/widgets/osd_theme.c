@@ -488,12 +488,93 @@ static void apply_kv(osd_theme_t *t, const char *section, const char *key, const
 	}
 }
 
+// Reads `inherit` out of [theme] without applying anything else.
+//
+// Pre-scanned rather than acted on where it appears, so a variant can put the
+// key wherever reads best: applied in place, the parent would overwrite
+// whatever the child had already set above it, and the file would only work if
+// the line happened to come first.
+static bool find_inherit(const char *path, char *out, size_t n) {
+	FILE *fp = fopen(path, "r");
+	if (!fp)
+		return false;
+	char line[512];
+	char section[64] = "";
+	bool found = false;
+	while (!found && fgets(line, sizeof(line), fp)) {
+		char *s = trim(line);
+		if (!*s || *s == '#' || *s == ';')
+			continue;
+		if (*s == '[') {
+			char *end = strchr(s, ']');
+			if (!end)
+				continue;
+			*end = '\0';
+			snprintf(section, sizeof(section), "%s", trim(s + 1));
+			continue;
+		}
+		char *eq = strchr(s, '=');
+		if (!eq)
+			continue;
+		*eq = '\0';
+		if (strcasecmp(trim(s), "inherit") != 0 || strcasecmp(section, "theme") != 0)
+			continue;
+		char *val = trim(eq + 1);
+		for (char *c = val; *c; c++) {
+			if (*c == ';' || *c == '#') {
+				*c = '\0';
+				break;
+			}
+		}
+		val = trim(val);
+		if (*val) {
+			snprintf(out, n, "%s", val);
+			found = true;
+		}
+	}
+	fclose(fp);
+	return found;
+}
+
+// A relative `inherit` is relative to the file naming it, not to the working
+// directory - a theme has no idea where msposd was started from.
+static void resolve_relative(const char *base_file, const char *rel, char *out, size_t n) {
+	if (rel[0] == '/') {
+		snprintf(out, n, "%s", rel);
+		return;
+	}
+	const char *slash = strrchr(base_file, '/');
+	if (!slash) {
+		snprintf(out, n, "%s", rel);
+		return;
+	}
+	const int dir_len = (int)(slash - base_file);
+	snprintf(out, n, "%.*s/%s", dir_len, base_file, rel);
+}
+
+static bool theme_load_depth(osd_theme_t *t, const char *path, int depth);
+
 bool osd_theme_load(osd_theme_t *t, const char *path) {
+	return theme_load_depth(t, path, 0);
+}
+
+static bool theme_load_depth(osd_theme_t *t, const char *path, int depth) {
 	if (!t || !path)
 		return false;
 	FILE *fp = fopen(path, "r");
 	if (!fp)
 		return false;
+
+	// A chain this long is a mistake rather than a design, and the limit is what
+	// stops a theme that inherits from itself taking the OSD down mid-flight.
+	if (depth < 4) {
+		char rel[256];
+		if (find_inherit(path, rel, sizeof(rel))) {
+			char parent[512];
+			resolve_relative(path, rel, parent, sizeof(parent));
+			theme_load_depth(t, parent, depth + 1);
+		}
+	}
 
 	// Parse into a copy: a file that fails halfway must not leave a
 	// half-applied theme behind.
