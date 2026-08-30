@@ -385,6 +385,8 @@ static void apply_kv(osd_theme_t *t, const char *section, const char *key, const
 				t->link_style = 0;
 			else if (!strcasecmp(val, "horizontal"))
 				t->link_style = 1;
+			else if (!strcasecmp(val, "ultrawide"))
+				t->link_style = 2;
 		} else if (!strcasecmp(key, "x") && parse_float(val, &f))
 			t->link_x = clampf(f, 0.0f, 100.0f);
 		else if (!strcasecmp(key, "y") && parse_float(val, &f))

@@ -54,6 +54,9 @@ static void plate(osd_surface_t *s, float x, float y, float w, float h, float ta
 #define LINK_ROW_H 30.0f
 #define LINK_FOOT_H 34.0f
 #define LINK_VERT_W 250.0f
+// Wide enough that the channel, the loss and the throughput fit on one line
+// with room to spare, which is the whole point of the style.
+#define LINK_ULTRA_W 620.0f
 
 // Horizontal: one column per antenna, four bands down each.
 #define LINK_COL_W 96.0f
@@ -96,8 +99,11 @@ static bool has_lq(const osd_link_stats_t *s) {
 	return s && s->quality_pct >= 0.0f;
 }
 
-// The footer carries whatever is left once link quality has its own row.
-static bool has_footer(const osd_link_stats_t *s) {
+// The footer carries whatever is left once link quality has its own row - and
+// nothing at all in the ultrawide style, where it has moved up to the header.
+static bool has_footer(const osd_link_stats_t *s, osd_link_style_t style) {
+	if (style == OSD_LINK_ULTRAWIDE)
+		return false;
 	return s && (s->loss_pct >= 0.0f || s->bitrate_mbps >= 0.0f);
 }
 
@@ -117,10 +123,15 @@ void osd_link_measure(
 		return;
 	const float k = p->scale > 0.0f ? p->scale : 1.0f;
 	const int n = p->show_antennas ? antenna_count(s) : 0;
-	const float foot = has_footer(s) ? LINK_FOOT_H : 0.0f;
+	const float foot = has_footer(s, p->style) ? LINK_FOOT_H : 0.0f;
 	const float lq = has_lq(s) ? LINK_LQ_H : 0.0f;
 
-	if (p->style == OSD_LINK_HORIZONTAL) {
+	if (p->style == OSD_LINK_ULTRAWIDE) {
+		const float snr = (n > 0 && has_snr(s)) ? LINK_H_SNR : 0.0f;
+		const float body = n > 0 ? (LINK_H_CAP + LINK_H_VAL + LINK_H_BAR + snr) : 0.0f;
+		*out_w = LINK_ULTRA_W * k;
+		*out_h = (LINK_HEAD_H + lq + body + LINK_BOTTOM_PAD) * k;
+	} else if (p->style == OSD_LINK_HORIZONTAL) {
 		// One column per antenna, with the header stacked above them so a wide
 		// widget does not also have to be a tall one.
 		const int cols = n > 0 ? n : 1;
@@ -156,23 +167,55 @@ static void footer_text(const osd_link_stats_t *s, char *out, size_t n) {
 // wider than four numbers, while the horizontal one has most of a raised plate
 // doing nothing. Rather than pick one wording for both and have it clipped in
 // the narrow case, the widest form that fits wins.
-static void tuning_text(const osd_link_stats_t *st, osd_font_t *font, float size, float avail,
-	char *out, size_t n) {
+static void tuning_text(const osd_link_stats_t *st, osd_link_style_t style, osd_font_t *font,
+	float size, float avail, char *out, size_t n) {
 	out[0] = '\0';
-	if (st->channel <= 0 && st->freq_mhz <= 0)
-		return;
 
-	char candidates[4][40];
+	// In the ultrawide style the loss and the throughput share this line, which
+	// is what makes the style worth having: one strip carrying everything but
+	// the aerials.
+	char tail[48];
+	tail[0] = '\0';
+	if (style == OSD_LINK_ULTRAWIDE) {
+		size_t used = 0;
+		if (st->loss_pct >= 0.0f)
+			used += (size_t)snprintf(tail + used, sizeof(tail) - used, "%.1f%% lost", st->loss_pct);
+		if (st->bitrate_mbps >= 0.0f)
+			snprintf(tail + used, sizeof(tail) - used, "%s%.1f Mbps", used ? "   " : "",
+				st->bitrate_mbps);
+	}
+
+	char tune[40];
+	tune[0] = '\0';
+	char candidates[6][96];
 	int count = 0;
 	if (st->channel > 0 && st->freq_mhz > 0 && st->bandwidth_mhz > 0)
-		snprintf(candidates[count++], 40, "CH%d  %d  %dMHz", st->channel, st->freq_mhz,
+		snprintf(tune, sizeof(tune), "CH%d  %d  %dMHz", st->channel, st->freq_mhz,
 			st->bandwidth_mhz);
-	if (st->channel > 0 && st->freq_mhz > 0)
-		snprintf(candidates[count++], 40, "CH%d  %d", st->channel, st->freq_mhz);
-	if (st->channel > 0)
-		snprintf(candidates[count++], 40, "CH%d", st->channel);
+	else if (st->channel > 0 && st->freq_mhz > 0)
+		snprintf(tune, sizeof(tune), "CH%d  %d", st->channel, st->freq_mhz);
+	else if (st->channel > 0)
+		snprintf(tune, sizeof(tune), "CH%d", st->channel);
 	else if (st->freq_mhz > 0)
-		snprintf(candidates[count++], 40, "%dMHz", st->freq_mhz);
+		snprintf(tune, sizeof(tune), "%dMHz", st->freq_mhz);
+
+	// Longest first, shedding a piece at a time. The bandwidth goes before the
+	// frequency, and the frequency before the channel: of the three the channel
+	// is the one a pilot actually acts on.
+	if (tune[0] && tail[0])
+		snprintf(candidates[count++], 96, "%s   %s", tune, tail);
+	if (tune[0] && tail[0] && st->bandwidth_mhz > 0 && st->channel > 0 && st->freq_mhz > 0)
+		snprintf(candidates[count++], 96, "CH%d  %d   %s", st->channel, st->freq_mhz, tail);
+	if (tune[0] && tail[0] && st->channel > 0)
+		snprintf(candidates[count++], 96, "CH%d   %s", st->channel, tail);
+	if (tail[0])
+		snprintf(candidates[count++], 96, "%s", tail);
+	if (tune[0])
+		snprintf(candidates[count++], 96, "%s", tune);
+	if (st->channel > 0)
+		snprintf(candidates[count++], 96, "CH%d", st->channel);
+	if (count == 0)
+		return;
 
 	for (int i = 0; i < count; i++) {
 		osd_text_metrics_t m = {0};
@@ -183,8 +226,7 @@ static void tuning_text(const osd_link_stats_t *st, osd_font_t *font, float size
 		}
 	}
 	// Nothing fits; the shortest is still better than a clipped longer one.
-	if (count > 0)
-		snprintf(out, n, "%s", candidates[count - 1]);
+	snprintf(out, n, "%s", candidates[count - 1]);
 }
 
 void osd_link_draw(osd_surface_t *s, osd_font_t *font, float x, float y,
@@ -223,8 +265,8 @@ void osd_link_draw(osd_surface_t *s, osd_font_t *font, float x, float y,
 	{
 		const float step = w * 0.34f;
 		const float tune_sz = label_sz * 1.15f;
-		char tune[40];
-		tuning_text(st, font, tune_sz, w - step - px * 2.0f, tune, sizeof(tune));
+		char tune[96];
+		tuning_text(st, p->style, font, tune_sz, w - step - px * 2.0f, tune, sizeof(tune));
 		if (tune[0]) {
 			osd_text_metrics_t m = {0};
 			osd_text_measure(font, tune_sz, tune, &m);
@@ -266,7 +308,7 @@ void osd_link_draw(osd_surface_t *s, osd_font_t *font, float x, float y,
 		body_top += row_h;
 	}
 
-	if (n > 0 && p->style == OSD_LINK_HORIZONTAL) {
+	if (n > 0 && p->style != OSD_LINK_VERTICAL) {
 		const float col_w = LINK_COL_W * k;
 		// Four bands per column: caption, the dBm number, its bar, SNR. Each
 		// baseline sits inside its own band rather than on its lower edge -
@@ -338,7 +380,7 @@ void osd_link_draw(osd_surface_t *s, osd_font_t *font, float x, float y,
 		}
 	}
 
-	if (has_footer(st)) {
+	if (has_footer(st, p->style)) {
 		char t[48];
 		footer_text(st, t, sizeof(t));
 		// Centred in the footer band rather than measured up from the bottom

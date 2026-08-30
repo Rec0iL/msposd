@@ -99,6 +99,22 @@ widget goes blank with no error anywhere. Aviateur's
 `src/gui/test_osd_link_writer.cpp` links all three and asserts they agree, with
 and without the override.
 
+Three styles, because where it goes decides what shape it can be: `vertical`
+stacks the aerials for a screen edge, `horizontal` puts them side by side for
+the top or bottom, and `ultrawide` is a shallow strip that moves the channel,
+the loss and the throughput onto its header line so the whole width below is
+free for the link quality bar.
+
+The per-aerial rows are optional in all three. Off leaves the headline - who is
+reporting, which channel, the quality bar - and the panel drops to roughly a
+third of its height. Six aerials is a lot of screen for something you study
+after landing rather than in the air.
+
+What appears is whatever the ground station reports, and the panel measures
+itself to that: wfb-ng gives per-aerial dBm and SNR, packet counts and the tuned
+channel, while APFPV's WiFi driver gives RSSI and a channel and nothing else, so
+that panel has no SNR row and no quality bar.
+
 Two things the parser has to survive, both of which a reader polling five times
 a second will hit sooner or later:
 

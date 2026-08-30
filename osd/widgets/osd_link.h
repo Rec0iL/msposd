@@ -26,6 +26,10 @@
 typedef enum {
 	OSD_LINK_VERTICAL = 0, // antennas stacked, for an edge of the screen
 	OSD_LINK_HORIZONTAL,   // antennas side by side, for the top or bottom
+	// A wide, shallow strip for the very top or bottom of the screen: the
+	// channel, packet loss and throughput all share the header line, leaving the
+	// whole width below it for the link quality bar.
+	OSD_LINK_ULTRAWIDE,
 } osd_link_style_t;
 
 /// More than any ground station in use, and small enough that the widget still

@@ -38,19 +38,24 @@ int main(int argc, char **argv) {
 		// throughput belongs to the stream rather than the radio, so it is
 		// reported here too.
 		st.quality_pct = -1.0f; st.loss_pct = -1.0f; st.bitrate_mbps = 11.4f;
-		// No channel: PixelPilot parses the WiFi driver's debug file for RSSI
-		// and link state only, and nothing else there knows the frequency.
+		// The channel comes from the Realtek driver's rf_info. These are the
+		// numbers off a real APFPV station: channel 140 at 40MHz.
+		st.channel = 140; st.freq_mhz = 5700; st.bandwidth_mhz = 40;
 	}
 
-	const int N = 4;
+	// Three styles, with and without the per-aerial rows.
+	const int N = 6;
 	uint8_t *sheet = calloc((size_t)W*H*N*4, 1);
 	for (int i = 0; i < N; i++) {
 		uint8_t *buf = calloc((size_t)W*H*4, 1);
 		osd_surface_t s; osd_surface_init(&s, buf, W, H, W*4);
 		osd_link_params_t p = {0};
-		p.style = (i % 2 == 0) ? OSD_LINK_VERTICAL : OSD_LINK_HORIZONTAL;
-		p.scale = 1.3f;
-		p.show_antennas = (i < 2);
+		const osd_link_style_t styles[3] = {
+			OSD_LINK_VERTICAL, OSD_LINK_HORIZONTAL, OSD_LINK_ULTRAWIDE};
+		const char *names[3] = {"vertical", "horizontal", "ultrawide"};
+		p.style = styles[i % 3];
+		p.scale = 1.15f;
+		p.show_antennas = (i < 3);
 		p.accent = OSD_ARGB(0xFF,0x00,0xE5,0xFF);
 		p.label  = OSD_ARGB(0xFF,0x4F,0xA8,0xC4);
 		p.good   = OSD_ARGB(0xFF,0x00,0xFF,0x9C);
@@ -67,9 +72,8 @@ int main(int argc, char **argv) {
 		float ww, hh; osd_link_measure(&p, &st, &ww, &hh);
 		osd_link_draw(&s, font, 60.0f, 60.0f, &p, &st, false);
 		char lbl[64];
-		snprintf(lbl, sizeof(lbl), "%s  %s  (%.0fx%.0f)",
-			p.style == OSD_LINK_VERTICAL ? "vertical" : "horizontal",
-			p.show_antennas ? "with aerials" : "aerials off", ww, hh);
+		snprintf(lbl, sizeof(lbl), "%s  %s  %s  (%.0fx%.0f)", names[i % 3], st.source,
+			p.show_antennas ? "aerials on" : "aerials off", ww, hh);
 		osd_text_draw(&s, font, 20.0f, 60, 40, lbl, p.accent);
 
 		uint8_t *dst = sheet + (size_t)i*W*H*4;

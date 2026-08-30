@@ -600,6 +600,32 @@ int main(void) {
 		// Six rows gone, so it should be a lot shorter rather than a little.
 		check("link: vertical drops six rows' worth", on_h - off_h > 100.0f);
 
+		// Ultrawide is the widest and shallowest of the three, and it carries no
+		// footer at all: the loss and the throughput share its header line.
+		{
+			osd_link_params_t up = lp;
+			up.show_antennas = true;
+			up.style = OSD_LINK_HORIZONTAL;
+			float hw, hh2;
+			osd_link_measure(&up, &full, &hw, &hh2);
+			up.style = OSD_LINK_ULTRAWIDE;
+			float uw, uh;
+			osd_link_measure(&up, &full, &uw, &uh);
+			check("link: ultrawide is wider than horizontal", uw > hw);
+			check("link: ultrawide is shallower", uh < hh2);
+
+			// Losing the footer must not depend on there being nothing to put
+			// in it - full stats, and it is still shorter.
+			osd_link_stats_t rich = full;
+			rich.loss_pct = 0.4f;
+			rich.bitrate_mbps = 12.4f;
+			up.style = OSD_LINK_HORIZONTAL;
+			osd_link_measure(&up, &rich, &hw, &hh2);
+			up.style = OSD_LINK_ULTRAWIDE;
+			osd_link_measure(&up, &rich, &uw, &uh);
+			check("link: ultrawide sheds the footer row", uh < hh2);
+		}
+
 		// The quality row exists only when quality is reported: a ground station
 		// that does not count packets must not get an empty bar.
 		lp.show_antennas = false;

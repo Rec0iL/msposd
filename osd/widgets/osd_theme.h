@@ -127,7 +127,7 @@ typedef struct {
 	// APFPV live on this side of the link - so there is no position on the glyph
 	// grid to inherit and everything about placement is set here.
 	bool link_enabled;
-	int link_style;   // 0 vertical, 1 horizontal
+	int link_style;   // 0 vertical, 1 horizontal, 2 ultrawide
 	float link_x;     // percent of the screen, of the widget's top-left corner
 	float link_y;
 	float link_scale;
