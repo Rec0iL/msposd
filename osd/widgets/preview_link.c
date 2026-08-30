@@ -42,14 +42,15 @@ int main(int argc, char **argv) {
 		// and link state only, and nothing else there knows the frequency.
 	}
 
-	const int N = 2;
+	const int N = 4;
 	uint8_t *sheet = calloc((size_t)W*H*N*4, 1);
 	for (int i = 0; i < N; i++) {
 		uint8_t *buf = calloc((size_t)W*H*4, 1);
 		osd_surface_t s; osd_surface_init(&s, buf, W, H, W*4);
 		osd_link_params_t p = {0};
-		p.style = (i == 0) ? OSD_LINK_VERTICAL : OSD_LINK_HORIZONTAL;
+		p.style = (i % 2 == 0) ? OSD_LINK_VERTICAL : OSD_LINK_HORIZONTAL;
 		p.scale = 1.3f;
+		p.show_antennas = (i < 2);
 		p.accent = OSD_ARGB(0xFF,0x00,0xE5,0xFF);
 		p.label  = OSD_ARGB(0xFF,0x4F,0xA8,0xC4);
 		p.good   = OSD_ARGB(0xFF,0x00,0xFF,0x9C);
@@ -66,8 +67,9 @@ int main(int argc, char **argv) {
 		float ww, hh; osd_link_measure(&p, &st, &ww, &hh);
 		osd_link_draw(&s, font, 60.0f, 60.0f, &p, &st, false);
 		char lbl[64];
-		snprintf(lbl, sizeof(lbl), "%s  scale %.1f  (%.0fx%.0f)",
-			p.style == OSD_LINK_VERTICAL ? "vertical" : "horizontal", p.scale, ww, hh);
+		snprintf(lbl, sizeof(lbl), "%s  %s  (%.0fx%.0f)",
+			p.style == OSD_LINK_VERTICAL ? "vertical" : "horizontal",
+			p.show_antennas ? "with aerials" : "aerials off", ww, hh);
 		osd_text_draw(&s, font, 20.0f, 60, 40, lbl, p.accent);
 
 		uint8_t *dst = sheet + (size_t)i*W*H*4;

@@ -67,6 +67,11 @@ static void plate(osd_surface_t *s, float x, float y, float w, float h, float ta
 // nor packet counts, the bars ended up sitting on the plate's bottom edge.
 #define LINK_BOTTOM_PAD 12.0f
 
+// Link quality gets a row of its own, above the aerials in both styles: it is
+// the headline number, and a bar is read at a glance where a percentage has to
+// be looked at.
+#define LINK_LQ_H 32.0f
+
 static int antenna_count(const osd_link_stats_t *s) {
 	if (!s || !s->valid)
 		return 0;
@@ -87,8 +92,23 @@ static bool has_snr(const osd_link_stats_t *s) {
 	return false;
 }
 
+static bool has_lq(const osd_link_stats_t *s) {
+	return s && s->quality_pct >= 0.0f;
+}
+
+// The footer carries whatever is left once link quality has its own row.
 static bool has_footer(const osd_link_stats_t *s) {
-	return s && (s->quality_pct >= 0.0f || s->loss_pct >= 0.0f || s->bitrate_mbps >= 0.0f);
+	return s && (s->loss_pct >= 0.0f || s->bitrate_mbps >= 0.0f);
+}
+
+// Link quality on the same scale the aerials use: green is a link you can fly,
+// amber is one to watch, red is one that is dropping frames.
+static osd_color_t quality_colour(const osd_link_params_t *p, float pct) {
+	if (pct >= 80.0f)
+		return p->good;
+	if (pct >= 50.0f)
+		return p->warn;
+	return p->crit;
 }
 
 void osd_link_measure(
@@ -96,21 +116,25 @@ void osd_link_measure(
 	if (!p || !out_w || !out_h)
 		return;
 	const float k = p->scale > 0.0f ? p->scale : 1.0f;
-	const int n = antenna_count(s);
+	const int n = p->show_antennas ? antenna_count(s) : 0;
 	const float foot = has_footer(s) ? LINK_FOOT_H : 0.0f;
+	const float lq = has_lq(s) ? LINK_LQ_H : 0.0f;
 
 	if (p->style == OSD_LINK_HORIZONTAL) {
 		// One column per antenna, with the header stacked above them so a wide
 		// widget does not also have to be a tall one.
 		const int cols = n > 0 ? n : 1;
-		*out_w = ((float)cols * LINK_COL_W + 24.0f) * k;
-		const float snr = has_snr(s) ? LINK_H_SNR : 0.0f;
+		// With the aerials off there are no columns to size to, so the width
+		// comes from the one row that is left.
+		*out_w = (n > 0 ? ((float)cols * LINK_COL_W + 24.0f) : LINK_VERT_W + 60.0f) * k;
+		const float snr = (n > 0 && has_snr(s)) ? LINK_H_SNR : 0.0f;
+		const float body = n > 0 ? (LINK_H_CAP + LINK_H_VAL + LINK_H_BAR + snr) : 0.0f;
 		const float tail = foot > 0.0f ? foot : LINK_BOTTOM_PAD;
-		*out_h = (LINK_HEAD_H + LINK_H_CAP + LINK_H_VAL + LINK_H_BAR + snr + tail) * k;
+		*out_h = (LINK_HEAD_H + lq + body + tail) * k;
 	} else {
 		const float tail = foot > 0.0f ? foot : LINK_BOTTOM_PAD;
 		*out_w = LINK_VERT_W * k;
-		*out_h = (LINK_HEAD_H + (float)n * LINK_ROW_H + tail) * k;
+		*out_h = (LINK_HEAD_H + lq + (float)n * LINK_ROW_H + tail) * k;
 	}
 }
 
@@ -119,8 +143,6 @@ void osd_link_measure(
 static void footer_text(const osd_link_stats_t *s, char *out, size_t n) {
 	out[0] = '\0';
 	size_t used = 0;
-	if (s->quality_pct >= 0.0f)
-		used += (size_t)snprintf(out + used, n - used, "%.0f%%", s->quality_pct);
 	if (s->loss_pct >= 0.0f)
 		used += (size_t)snprintf(out + used, n - used, "%s%.1f%% lost", used ? "  " : "",
 			s->loss_pct);
@@ -170,7 +192,7 @@ void osd_link_draw(osd_surface_t *s, osd_font_t *font, float x, float y,
 	if (!s || !p || !st)
 		return;
 	const float k = p->scale > 0.0f ? p->scale : 1.0f;
-	const int n = antenna_count(st);
+	const int n = p->show_antennas ? antenna_count(st) : 0;
 
 	float w, h;
 	osd_link_measure(p, st, &w, &h);
@@ -213,13 +235,44 @@ void osd_link_draw(osd_surface_t *s, osd_font_t *font, float x, float y,
 
 	const float bar_h = p->bar_height * k * 0.62f;
 
-	if (p->style == OSD_LINK_HORIZONTAL) {
+	// Link quality, above the aerials in both styles. A wide bar, because this
+	// is the number you glance at rather than read.
+	float body_top = y + LINK_HEAD_H * k;
+	if (has_lq(st)) {
+		const float row_h = LINK_LQ_H * k;
+		const osd_color_t c = quality_colour(p, st->quality_pct);
+		char t[16];
+
+		osd_text_draw_tracked(s, font, label_sz, (int)(x + px),
+			(int)(body_top + row_h * 0.5f + label_sz * 0.36f), "LQ", p->label_tracking * k,
+			p->label);
+
+		snprintf(t, sizeof(t), "%.0f%%", st->quality_pct);
+		osd_text_metrics_t m = {0};
+		osd_text_measure(font, value_sz * 0.72f, t, &m);
+		const float val_x = x + px + 34.0f * k;
+		osd_text_draw(s, font, value_sz * 0.72f, (int)val_x,
+			(int)(body_top + row_h * 0.5f + value_sz * 0.72f * 0.36f), t, c);
+
+		const float bar_x = val_x + (float)m.width + 12.0f * k;
+		const float bw = x + w - px - bar_x;
+		const float by = body_top + row_h * 0.5f - bar_h * 0.5f;
+		if (bw > 10.0f) {
+			float frac = st->quality_pct / 100.0f;
+			frac = frac < 0.0f ? 0.0f : (frac > 1.0f ? 1.0f : frac);
+			osd_fill_rect(s, (int)bar_x, (int)by, (int)bw, (int)bar_h, p->track);
+			osd_fill_rect(s, (int)bar_x, (int)by, (int)(bw * frac), (int)bar_h, c);
+		}
+		body_top += row_h;
+	}
+
+	if (n > 0 && p->style == OSD_LINK_HORIZONTAL) {
 		const float col_w = LINK_COL_W * k;
 		// Four bands per column: caption, the dBm number, its bar, SNR. Each
 		// baseline sits inside its own band rather than on its lower edge -
 		// hanging text off a band's bottom left the descenders below the plate
 		// whenever nothing followed to cover for it.
-		const float cap_top = y + LINK_HEAD_H * k;
+		const float cap_top = body_top;
 		const float val_top = cap_top + LINK_H_CAP * k;
 		const float bar_top = val_top + LINK_H_VAL * k;
 		const float snr_top = bar_top + LINK_H_BAR * k;
@@ -250,10 +303,10 @@ void osd_link_draw(osd_surface_t *s, osd_font_t *font, float x, float y,
 					snr_colour(p, st->snr_db[i]));
 			}
 		}
-	} else {
+	} else if (n > 0) {
 		const float row_h = LINK_ROW_H * k;
 		for (int i = 0; i < n; i++) {
-			const float ry = y + LINK_HEAD_H * k + (float)i * row_h;
+			const float ry = body_top + (float)i * row_h;
 			char t[16];
 
 			snprintf(t, sizeof(t), "A%d", i + 1);

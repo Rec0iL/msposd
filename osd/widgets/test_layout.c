@@ -579,6 +579,35 @@ int main(void) {
 		lp.style = OSD_LINK_HORIZONTAL;
 		osd_link_measure(&lp, &full, &lw, &lh);
 		check("link: horizontal fits at six antennas", lw < 1920.0f && lh < 1080.0f);
+
+		// Turning the aerials off has to actually shrink the panel, in both
+		// directions for the horizontal style - it sizes its width to the
+		// number of columns, and with no columns there is nothing to size to.
+		float on_w, on_h, off_w, off_h;
+		lp.show_antennas = true;
+		osd_link_measure(&lp, &full, &on_w, &on_h);
+		lp.show_antennas = false;
+		osd_link_measure(&lp, &full, &off_w, &off_h);
+		check("link: aerials off is shorter", off_h < on_h);
+		check("link: aerials off is narrower", off_w < on_w);
+
+		lp.style = OSD_LINK_VERTICAL;
+		lp.show_antennas = true;
+		osd_link_measure(&lp, &full, &on_w, &on_h);
+		lp.show_antennas = false;
+		osd_link_measure(&lp, &full, &off_w, &off_h);
+		check("link: vertical loses its aerial rows", off_h < on_h);
+		// Six rows gone, so it should be a lot shorter rather than a little.
+		check("link: vertical drops six rows' worth", on_h - off_h > 100.0f);
+
+		// The quality row exists only when quality is reported: a ground station
+		// that does not count packets must not get an empty bar.
+		lp.show_antennas = false;
+		osd_link_stats_t noq = full;
+		noq.quality_pct = -1.0f;
+		float noq_w, noq_h;
+		osd_link_measure(&lp, &noq, &noq_w, &noq_h);
+		check("link: no quality, no quality row", noq_h < off_h);
 	}
 
 	// The widget is placed from the theme, clamped into the viewport, and panels

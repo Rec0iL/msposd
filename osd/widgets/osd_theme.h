@@ -131,6 +131,9 @@ typedef struct {
 	float link_x;     // percent of the screen, of the widget's top-left corner
 	float link_y;
 	float link_scale;
+	// Per-aerial readings. Off leaves the headline - who, which channel, how
+	// good the link is - which is what most pilots actually watch in flight.
+	bool link_antennas;
 	float link_opacity;
 	// Where the ground station writes its stats. Empty disables the widget as
 	// surely as link_enabled = no, and is the default: a station that has not

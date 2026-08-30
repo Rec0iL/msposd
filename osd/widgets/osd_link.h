@@ -86,6 +86,10 @@ bool osd_link_stats_stale(const osd_link_stats_t *s, uint64_t now_ms, float hold
 typedef struct {
 	osd_link_style_t style;
 	float scale;
+	// Per-aerial readings. Off leaves the headline - who, what channel, how good
+	// the link is - which is all most pilots watch in the air. A six-aerial
+	// station is a lot of panel for something you only study on the ground.
+	bool show_antennas;
 
 	// Palette, matching the panels so this does not read as a different OSD.
 	osd_color_t accent, label, good, warn, crit, fill, edge, track;

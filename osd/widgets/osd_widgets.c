@@ -1271,6 +1271,7 @@ int osd_widgets_draw_all(osd_surface_t *s, const osd_theme_t *th, osd_font_t *fo
 			const float op = th->link_opacity * th->global_opacity;
 			lp.style = (osd_link_style_t)th->link_style;
 			lp.scale = th->link_scale * th->global_scale;
+			lp.show_antennas = th->link_antennas;
 			lp.accent = osd_theme_apply_opacity(th->accent, op);
 			lp.label = osd_theme_apply_opacity(th->label, op);
 			lp.good = osd_theme_apply_opacity(th->good, op);

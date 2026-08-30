@@ -33,6 +33,7 @@ void osd_theme_defaults(osd_theme_t *t) {
 	t->link_x = 2.0f;
 	t->link_y = 34.0f;
 	t->link_scale = 1.0f;
+	t->link_antennas = true;
 	t->link_opacity = 1.0f;
 	t->link_source[0] = '\0';
 	t->link_hold_ms = 3000.0f;
@@ -390,6 +391,8 @@ static void apply_kv(osd_theme_t *t, const char *section, const char *key, const
 			t->link_y = clampf(f, 0.0f, 100.0f);
 		else if (!strcasecmp(key, "scale") && parse_float(val, &f))
 			t->link_scale = clampf(f, 0.3f, 4.0f);
+		else if (!strcasecmp(key, "antennas") && parse_bool(val, &b))
+			t->link_antennas = b;
 		else if (!strcasecmp(key, "opacity") && parse_float(val, &f))
 			t->link_opacity = clampf(f, 0.0f, 1.0f);
 		else if (!strcasecmp(key, "source"))
