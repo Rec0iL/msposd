@@ -48,6 +48,25 @@ anything else is a percentage. The overlap — a small positive SNR against a lo
 RSSI percentage — is genuinely undecidable, and percentage wins because the other
 mistake is the harmful one.
 
+## The two firmwares disagree about almost everything
+
+Both are covered from their own source — Betaflight's `src/main/osd/osd_elements.c`
+and INAV's `src/main/io/osd.c`, with the symbol codes from each firmware's
+`osd_symbols.h`. They arrange the same readings very differently:
+
+| | Betaflight | INAV |
+|---|---|---|
+| unit | separate glyph at the end of the field | baked into the symbol (`SYM_ALT_M` vs `SYM_ALT_FT`) |
+| speed | `SYM_SPEED` then digits then unit | no symbol at all — `"%3d%c"`, the unit glyph *is* the anchor |
+| airspeed | an `a` after the symbol | `SYM_AIR` in front of the field |
+| dBm | shares `SYM_RSSI`, told apart by magnitude | own `SYM_DBM` closing the field |
+| direction arrows | `0x60`–`0x6F` | `0x13C`–`0x14B` |
+| numerical heading | an arrow followed by three digits | `SYM_HEADING` then digits then `SYM_DEGREES` |
+
+The last row is why the arrow pass tests for digits: on Betaflight a lone arrow
+is the home marker and an arrow with digits is the heading, while INAV gives
+heading its own symbol so the digit check simply never fires there.
+
 ## Firmware differences that bite
 
 - **`SYM_ALTITUDE` leads in Betaflight.** `osdFormatAltitudeString` passes it to
@@ -65,6 +84,14 @@ mistake is the harmful one.
   else, so a dive and a climb of the same rate arrive identical.
 - **The same sixteen arrow glyphs serve two elements.** A lone arrow is the home
   direction; an arrow followed by three digits is the numerical heading.
+- **INAV's ground speed and wind speed end identically.** Both are digits
+  followed by the same unit glyph; only what sits in front separates them. Rows
+  anchored on nothing but a unit glyph therefore demand a clear run of blanks to
+  their left, checked across the field's padding rather than one cell over — a
+  right-aligned `"%3d"` holding 4 leaves a blank where the marker would be.
+- **A marker is not adjacent to its digits.** `"%c%3d%c"` holding 92 puts a blank
+  between the symbol and the number, so both the row lookup and the absorb have
+  to look across the padding.
 
 ## Tests
 

@@ -24,13 +24,28 @@ typedef struct {
 	// being left on screen beside the widget. Betaflight writes one on every
 	// converted quantity; INAV encodes the unit in the symbol itself instead.
 	bool trailing_unit;
-	// Letters the firmware writes around the symbol, which have to be stepped
-	// over rather than parsed. Betaflight puts them on both sides: temperature
-	// is "C<sym>42<unit>" with the letter *before*, airspeed is "<sym>a92<unit>"
-	// with it after. The table holds one row per letter, so a row whose letter is
-	// not on screen is simply the wrong row. 0 for none.
-	char prefix; // in the cell before the symbol
-	char infix;  // between the symbol and the digits
+	// Glyphs the firmware writes around the field, which have to be stepped over
+	// rather than parsed, and which say *which* reading this is. Betaflight uses
+	// letters on both sides - temperature is "C<sym>42<unit>", airspeed is
+	// "<sym>a92<unit>" - and INAV uses symbols, putting SYM_AIR in front of an
+	// otherwise identical speed field. The table holds one row per marker, so a
+	// row whose marker is not on screen is simply the wrong row. 0 for none.
+	//
+	// `prefix` is the cell immediately before the whole field: before the symbol
+	// where the symbol leads, before the digits where it trails.
+	uint16_t prefix;
+	uint16_t infix; // between the symbol and the digits
+	// The unit the anchor itself implies. INAV encodes it in the symbol - it has
+	// separate glyphs for km/h, mph and knots - where Betaflight writes a
+	// general symbol and closes the field with a unit glyph.
+	osd_unit_t unit;
+	bool airspeed;  // the marker says this is airspeed, not speed over ground
+	float scale;    // multiplier onto the parsed number; 0 means 1
+	// Require the cell before the field to be blank. Needed where the anchor is
+	// nothing but a unit glyph: INAV draws ground speed as "%3d<km/h>" with no
+	// symbol of its own, and wind speed as "<wind><dir>%3d<km/h>" - identical
+	// from the unit glyph leftwards, so without this the wind reads as speed.
+	bool strict_start;
 } osd_anchor_t;
 
 // Betaflight converts to the pilot's configured units before drawing and marks
@@ -51,22 +66,106 @@ static osd_unit_t unit_for_glyph(uint16_t g) {
 	}
 }
 
+// INAV's, which are different codes and a longer list: it has separate glyphs
+// for a distance in metres and an altitude in metres, and adds nautical units.
+static osd_unit_t unit_for_glyph_inav(uint16_t g) {
+	switch (g) {
+	case 0x7A: return OSD_UNIT_METRES; // SYM_DIST_M
+	case 0x7E: return OSD_UNIT_KM;     // SYM_DIST_KM
+	case 0x7F: return OSD_UNIT_FEET;   // SYM_DIST_FT
+	case 0x80: return OSD_UNIT_MILES;  // SYM_DIST_MI
+	case 0x81: return OSD_UNIT_NM;     // SYM_DIST_NM
+	case 0x82: return OSD_UNIT_METRES; // SYM_M
+	case 0x83: return OSD_UNIT_KM;     // SYM_KM
+	case 0x84: return OSD_UNIT_MILES;  // SYM_MI
+	case 0x85: return OSD_UNIT_NM;     // SYM_NM
+	case 0x74: return OSD_UNIT_FEET;   // SYM_FT
+	case 0x96: return OSD_UNIT_FAHRENHEIT; // SYM_TEMP_F
+	case 0x97: return OSD_UNIT_CELSIUS;    // SYM_TEMP_C
+	default: return OSD_UNIT_NONE;
+	}
+}
+
 // INAV encodes the unit in the symbol itself - SYM_ALT_M and SYM_ALT_FT are
 // different glyphs - so nothing here carries a trailing unit.
 static const osd_anchor_t kAnchorsInav[] = {
-	{0x1F, 0, OSD_ELEM_VOLTAGE, false, VAL_NUMBER, false, 0, 0},  // SYM_VOLT
-	{0x6A, 0, OSD_ELEM_CURRENT, false, VAL_NUMBER, false, 0, 0},  // SYM_AMP
-	{0x99, 0, OSD_ELEM_MAH, false, VAL_NUMBER, false, 0, 0},      // SYM_MAH
-	{0x76, 0, OSD_ELEM_ALTITUDE, false, VAL_NUMBER, false, 0, 0}, // SYM_ALT_M
-	{0x78, 0, OSD_ELEM_ALTITUDE, false, VAL_NUMBER, false, 0, 0}, // SYM_ALT_FT
-	{0x03, 0, OSD_ELEM_LATITUDE, true, VAL_NUMBER, false, 0, 0},  // SYM_LAT
-	{0x04, 0, OSD_ELEM_LONGITUDE, true, VAL_NUMBER, false, 0, 0}, // SYM_LON
-	{0x01, 0, OSD_ELEM_RSSI, true, VAL_NUMBER, false, 0, 0},      // SYM_RSSI
-	{0x09, 0x08, OSD_ELEM_SATS, true, VAL_NUMBER, false, 0, 0},   // SYM_SAT_R, icon SYM_SAT_L
-	{0x95, 0, OSD_ELEM_THROTTLE, true, VAL_NUMBER, false, 0, 0},  // SYM_THR
-	{0x9F, 0, OSD_ELEM_FLIGHT_TIME, true, VAL_TIME, false, 0, 0}, // SYM_FLY_M
-	{0x9E, 0, OSD_ELEM_FLIGHT_TIME, true, VAL_TIME, false, 0, 0}, // SYM_ON_M
-	{0xA0, 0, OSD_ELEM_FLIGHT_TIME, true, VAL_TIME, false, 0, 0}, // SYM_CLOCK
+	{0x1F, 0, OSD_ELEM_VOLTAGE, false, VAL_NUMBER, false, 0, 0, OSD_UNIT_NONE, false, 0, false},  // SYM_VOLT
+	{0x6A, 0, OSD_ELEM_CURRENT, false, VAL_NUMBER, false, 0, 0, OSD_UNIT_NONE, false, 0, false},  // SYM_AMP
+	{0x99, 0, OSD_ELEM_MAH, false, VAL_NUMBER, false, 0, 0, OSD_UNIT_NONE, false, 0, false},      // SYM_MAH
+	{0x76, 0, OSD_ELEM_ALTITUDE, false, VAL_NUMBER, false, 0, 0, OSD_UNIT_METRES, false, 0, false}, // SYM_ALT_M
+	{0x78, 0, OSD_ELEM_ALTITUDE, false, VAL_NUMBER, false, 0, 0, OSD_UNIT_FEET, false, 0, false},   // SYM_ALT_FT
+	{0x03, 0, OSD_ELEM_LATITUDE, true, VAL_NUMBER, false, 0, 0, OSD_UNIT_NONE, false, 0, false},  // SYM_LAT
+	{0x04, 0, OSD_ELEM_LONGITUDE, true, VAL_NUMBER, false, 0, 0, OSD_UNIT_NONE, false, 0, false}, // SYM_LON
+	{0x01, 0, OSD_ELEM_RSSI, true, VAL_NUMBER, true, 0, 0, OSD_UNIT_NONE, false, 0, false},       // SYM_RSSI
+	{0x09, 0x08, OSD_ELEM_SATS, true, VAL_NUMBER, false, 0, 0, OSD_UNIT_NONE, false, 0, false},   // SYM_SAT_R, icon SYM_SAT_L
+	{0x95, 0, OSD_ELEM_THROTTLE, true, VAL_NUMBER, false, 0, 0, OSD_UNIT_NONE, false, 0, false},  // SYM_THR
+	{0x9F, 0, OSD_ELEM_FLIGHT_TIME, true, VAL_TIME, false, 0, 0, OSD_UNIT_NONE, false, 0, false}, // SYM_FLY_M
+	{0x9E, 0, OSD_ELEM_FLIGHT_TIME, true, VAL_TIME, false, 0, 0, OSD_UNIT_NONE, false, 0, false}, // SYM_ON_M
+	{0xA0, 0, OSD_ELEM_FLIGHT_TIME, true, VAL_TIME, false, 0, 0, OSD_UNIT_NONE, false, 0, false}, // SYM_CLOCK
+	{0x77, 0, OSD_ELEM_ALTITUDE, false, VAL_NUMBER, false, 0, 0, OSD_UNIT_KM, false, 0, false},  // SYM_ALT_KM
+	{0x79, 0, OSD_ELEM_ALTITUDE, false, VAL_NUMBER, false, 0, 0, OSD_UNIT_KFT, false, 0, false}, // SYM_ALT_KFT
+
+	// Speed has no symbol of its own - osdFormatVelocityStr writes "%3d%c", so
+	// the unit glyph is the anchor. strict_start keeps wind speed, which ends
+	// identically, from being read as ground speed.
+	{0x90, 0, OSD_ELEM_SPEED, false, VAL_NUMBER, false, 0, 0, OSD_UNIT_KPH, false, 0, true},   // SYM_KMH
+	{0x91, 0, OSD_ELEM_SPEED, false, VAL_NUMBER, false, 0, 0, OSD_UNIT_MPH, false, 0, true},   // SYM_MPH
+	{0x92, 0, OSD_ELEM_SPEED, false, VAL_NUMBER, false, 0, 0, OSD_UNIT_KNOTS, false, 0, true}, // SYM_KT
+	// The same field with SYM_AIR in front of it is airspeed.
+	{0x90, 0, OSD_ELEM_SPEED, false, VAL_NUMBER, false, 0x8C, 0, OSD_UNIT_KPH, true, 0, false},
+	{0x91, 0, OSD_ELEM_SPEED, false, VAL_NUMBER, false, 0x8C, 0, OSD_UNIT_MPH, true, 0, false},
+	{0x92, 0, OSD_ELEM_SPEED, false, VAL_NUMBER, false, 0x8C, 0, OSD_UNIT_KNOTS, true, 0, false},
+	// And again with the 3D speed glyphs, which are speed through the air
+	// including the vertical component.
+	{0x88, 0, OSD_ELEM_SPEED, false, VAL_NUMBER, false, 0, 0, OSD_UNIT_KPH, false, 0, true},   // SYM_3D_KMH
+	{0x89, 0, OSD_ELEM_SPEED, false, VAL_NUMBER, false, 0, 0, OSD_UNIT_MPH, false, 0, true},   // SYM_3D_MPH
+	{0x8A, 0, OSD_ELEM_SPEED, false, VAL_NUMBER, false, 0, 0, OSD_UNIT_KNOTS, false, 0, true}, // SYM_3D_KT
+
+	// Climb rate, likewise anchored on its unit.
+	{0x8F, 0, OSD_ELEM_VARIO, false, VAL_NUMBER, false, 0, 0, OSD_UNIT_MPS, false, 0, true},  // SYM_MS
+	{0x8D, 0, OSD_ELEM_VARIO, false, VAL_NUMBER, false, 0, 0, OSD_UNIT_FTPS, false, 0, true}, // SYM_FTS
+
+	// Power. Above a kilowatt INAV switches the glyph and the number with it, so
+	// the scale here keeps both cases in watts on our side.
+	{0x71, 0, OSD_ELEM_POWER, false, VAL_NUMBER, false, 0, 0, OSD_UNIT_NONE, false, 0, true},      // SYM_WATT
+	{0x73, 0, OSD_ELEM_POWER, false, VAL_NUMBER, false, 0, 0, OSD_UNIT_NONE, false, 1000.0f, true}, // SYM_KILOWATT
+
+	// Distances: a leading symbol, then the number, then a unit glyph that says
+	// whether it scaled to km or miles.
+	{0x10, 0, OSD_ELEM_HOME_DISTANCE, true, VAL_NUMBER, true, 0, 0, OSD_UNIT_NONE, false, 0, false},  // SYM_HOME
+	{0x75, 0, OSD_ELEM_TOTAL_DISTANCE, true, VAL_NUMBER, true, 0, 0, OSD_UNIT_NONE, false, 0, false}, // SYM_TOTAL
+
+	// Heading and ground course are the same shape: symbol, three digits,
+	// SYM_DEGREES. Which one it is depends only on the leading symbol.
+	{0x0C, 0, OSD_ELEM_HEADING, true, VAL_NUMBER, true, 0, 0, OSD_UNIT_NONE, false, 0, false}, // SYM_HEADING
+	{0xDC, 0, OSD_ELEM_HEADING, true, VAL_NUMBER, true, 0, 0, OSD_UNIT_NONE, false, 0, false}, // SYM_GROUND_COURSE
+
+	// Link statistics. INAV gives each its own symbol, so unlike Betaflight
+	// there is nothing here to disentangle by magnitude.
+	{0x02, 0, OSD_ELEM_LINK_QUALITY, true, VAL_NUMBER, false, 0, 0, OSD_UNIT_NONE, false, 0, false}, // SYM_LQ
+	// SNR leads with its own symbol and closes with SYM_DB.
+	{0x14, 0, OSD_ELEM_SNR, true, VAL_NUMBER, true, 0, 0, OSD_UNIT_NONE, false, 0, false}, // SYM_SNR
+	// The second-antenna variant of the RSSI symbol. Same field, same meaning.
+	{0x11, 0, OSD_ELEM_RSSI, true, VAL_NUMBER, true, 0, 0, OSD_UNIT_NONE, false, 0, false}, // SYM_2RSS
+
+	{0xBC, 0, OSD_ELEM_GFORCE, true, VAL_NUMBER, false, 0, 0, OSD_UNIT_NONE, false, 0, false}, // SYM_GFORCE
+
+	// Temperature sensors, SYM_TEMP through SYM_TEMP_SENSOR_LAST, with the ESC
+	// probe sitting inside that range. The unit glyph closes the field.
+	{0xC2, 0, OSD_ELEM_TEMPERATURE, true, VAL_NUMBER, true, 0, 0, OSD_UNIT_NONE, false, 0, false},
+	{0xC3, 0, OSD_ELEM_TEMPERATURE, true, VAL_NUMBER, true, 0, 0, OSD_UNIT_NONE, false, 0, false},
+	{0xC4, 0, OSD_ELEM_TEMPERATURE, true, VAL_NUMBER, true, 0, 0, OSD_UNIT_NONE, false, 0, false},
+	{0xC5, 0, OSD_ELEM_TEMPERATURE, true, VAL_NUMBER, true, 0, 0, OSD_UNIT_NONE, false, 0, false},
+	{0xC6, 0, OSD_ELEM_TEMPERATURE, true, VAL_NUMBER, true, 0, 0, OSD_UNIT_NONE, false, 0, false},
+	{0xC7, 0, OSD_ELEM_TEMPERATURE, true, VAL_NUMBER, true, 0, 0, OSD_UNIT_NONE, false, 0, false},
+
+	// Efficiency. These three codes land on printable ASCII - '"', '$', '?' - so
+	// they only mean this because INAV's font puts Ah/km glyphs there. Requiring
+	// a blank before the number keeps a question mark in a message from becoming
+	// an efficiency reading.
+	{0x22, 0, OSD_ELEM_EFFICIENCY, false, VAL_NUMBER, false, 0, 0, OSD_UNIT_KM, false, 0, true},    // SYM_AH_KM
+	{0x24, 0, OSD_ELEM_EFFICIENCY, false, VAL_NUMBER, false, 0, 0, OSD_UNIT_MILES, false, 0, true}, // SYM_AH_MI
+	{0x3F, 0, OSD_ELEM_EFFICIENCY, false, VAL_NUMBER, false, 0, 0, OSD_UNIT_NM, false, 0, true},    // SYM_AH_NM
 };
 
 // Betaflight formats every one of these through osdPrintFloat() or a tfp_sprintf
@@ -74,30 +173,30 @@ static const osd_anchor_t kAnchorsInav[] = {
 // side the symbol sits on, whether a unit follows - is taken from there rather
 // than guessed.
 static const osd_anchor_t kAnchorsBtfl[] = {
-	{0x06, 0, OSD_ELEM_VOLTAGE, false, VAL_NUMBER, false, 0, 0},    // SYM_VOLT
-	{0x9A, 0, OSD_ELEM_CURRENT, false, VAL_NUMBER, false, 0, 0},    // SYM_AMP
-	{0x07, 0, OSD_ELEM_MAH, false, VAL_NUMBER, false, 0, 0},        // SYM_MAH
+	{0x06, 0, OSD_ELEM_VOLTAGE, false, VAL_NUMBER, false, 0, 0, OSD_UNIT_NONE, false, 0, false},    // SYM_VOLT
+	{0x9A, 0, OSD_ELEM_CURRENT, false, VAL_NUMBER, false, 0, 0, OSD_UNIT_NONE, false, 0, false},    // SYM_AMP
+	{0x07, 0, OSD_ELEM_MAH, false, VAL_NUMBER, false, 0, 0, OSD_UNIT_NONE, false, 0, false},        // SYM_MAH
 	// SYM_ALTITUDE *leads* in Betaflight - osdFormatAltitudeString passes it as
 	// osdPrintFloat's leading symbol, with the unit trailing. Treating it as a
 	// trailing symbol meant looking left at blank cells, so Betaflight altitude
 	// was never recognised at all.
-	{0x7F, 0, OSD_ELEM_ALTITUDE, true, VAL_NUMBER, true, 0, 0},     // SYM_ALTITUDE
-	{0x89, 0, OSD_ELEM_LATITUDE, true, VAL_NUMBER, false, 0, 0},    // SYM_LAT
-	{0x98, 0, OSD_ELEM_LONGITUDE, true, VAL_NUMBER, false, 0, 0},   // SYM_LON
-	{0x01, 0, OSD_ELEM_RSSI, true, VAL_NUMBER, false, 0, 0},        // SYM_RSSI
-	{0x1F, 0x1E, OSD_ELEM_SATS, true, VAL_NUMBER, false, 0, 0},     // SYM_SAT_R, icon SYM_SAT_L
-	{0x04, 0, OSD_ELEM_THROTTLE, true, VAL_NUMBER, false, 0, 0},    // SYM_THR
-	{0x9C, 0, OSD_ELEM_FLIGHT_TIME, true, VAL_TIME, false, 0, 0},   // SYM_FLY_M
-	{0x9B, 0, OSD_ELEM_FLIGHT_TIME, true, VAL_TIME, false, 0, 0},   // SYM_ON_M
-	{0x70, 0, OSD_ELEM_SPEED, true, VAL_NUMBER, true, 0, 0},        // SYM_SPEED
-	{0x70, 0, OSD_ELEM_SPEED, true, VAL_NUMBER, true, 0, 'a'},      // the same, airspeed
-	{0x75, 0, OSD_ELEM_VARIO, true, VAL_NUMBER, true, 0, 0},        // SYM_ARROW_SMALL_UP
-	{0x76, 0, OSD_ELEM_VARIO, true, VAL_NUMBER, true, 0, 0},        // SYM_ARROW_SMALL_DOWN
-	{0x11, 0, OSD_ELEM_HOME_DISTANCE, true, VAL_NUMBER, true, 0, 0},  // SYM_HOMEFLAG
-	{0x71, 0, OSD_ELEM_TOTAL_DISTANCE, true, VAL_NUMBER, true, 0, 0}, // SYM_TOTAL_DISTANCE
-	{0x7A, 0, OSD_ELEM_TEMPERATURE, true, VAL_NUMBER, true, 'C', 0},  // SYM_TEMPERATURE, core
-	{0x7A, 0, OSD_ELEM_TEMPERATURE, true, VAL_NUMBER, true, 'E', 0},  // the same, ESC
-	{0x7B, 0, OSD_ELEM_LINK_QUALITY, true, VAL_NUMBER, false, 0, 0},  // SYM_LINK_QUALITY
+	{0x7F, 0, OSD_ELEM_ALTITUDE, true, VAL_NUMBER, true, 0, 0, OSD_UNIT_NONE, false, 0, false},     // SYM_ALTITUDE
+	{0x89, 0, OSD_ELEM_LATITUDE, true, VAL_NUMBER, false, 0, 0, OSD_UNIT_NONE, false, 0, false},    // SYM_LAT
+	{0x98, 0, OSD_ELEM_LONGITUDE, true, VAL_NUMBER, false, 0, 0, OSD_UNIT_NONE, false, 0, false},   // SYM_LON
+	{0x01, 0, OSD_ELEM_RSSI, true, VAL_NUMBER, false, 0, 0, OSD_UNIT_NONE, false, 0, false},        // SYM_RSSI
+	{0x1F, 0x1E, OSD_ELEM_SATS, true, VAL_NUMBER, false, 0, 0, OSD_UNIT_NONE, false, 0, false},     // SYM_SAT_R, icon SYM_SAT_L
+	{0x04, 0, OSD_ELEM_THROTTLE, true, VAL_NUMBER, false, 0, 0, OSD_UNIT_NONE, false, 0, false},    // SYM_THR
+	{0x9C, 0, OSD_ELEM_FLIGHT_TIME, true, VAL_TIME, false, 0, 0, OSD_UNIT_NONE, false, 0, false},   // SYM_FLY_M
+	{0x9B, 0, OSD_ELEM_FLIGHT_TIME, true, VAL_TIME, false, 0, 0, OSD_UNIT_NONE, false, 0, false},   // SYM_ON_M
+	{0x70, 0, OSD_ELEM_SPEED, true, VAL_NUMBER, true, 0, 0, OSD_UNIT_NONE, false, 0, false},        // SYM_SPEED
+	{0x70, 0, OSD_ELEM_SPEED, true, VAL_NUMBER, true, 0, 'a', OSD_UNIT_NONE, false, 0, false},      // the same, airspeed
+	{0x75, 0, OSD_ELEM_VARIO, true, VAL_NUMBER, true, 0, 0, OSD_UNIT_NONE, false, 0, false},        // SYM_ARROW_SMALL_UP
+	{0x76, 0, OSD_ELEM_VARIO, true, VAL_NUMBER, true, 0, 0, OSD_UNIT_NONE, false, 0, false},        // SYM_ARROW_SMALL_DOWN
+	{0x11, 0, OSD_ELEM_HOME_DISTANCE, true, VAL_NUMBER, true, 0, 0, OSD_UNIT_NONE, false, 0, false},  // SYM_HOMEFLAG
+	{0x71, 0, OSD_ELEM_TOTAL_DISTANCE, true, VAL_NUMBER, true, 0, 0, OSD_UNIT_NONE, false, 0, false}, // SYM_TOTAL_DISTANCE
+	{0x7A, 0, OSD_ELEM_TEMPERATURE, true, VAL_NUMBER, true, 'C', 0, OSD_UNIT_NONE, false, 0, false},  // SYM_TEMPERATURE, core
+	{0x7A, 0, OSD_ELEM_TEMPERATURE, true, VAL_NUMBER, true, 'E', 0, OSD_UNIT_NONE, false, 0, false},  // the same, ESC
+	{0x7B, 0, OSD_ELEM_LINK_QUALITY, true, VAL_NUMBER, false, 0, 0, OSD_UNIT_NONE, false, 0, false},  // SYM_LINK_QUALITY
 };
 
 // The compass bar is built from a small alphabet of graphic glyphs - N, S, E, W,
@@ -128,6 +227,12 @@ static bool cell_claimed(const osd_element_t *out, int found, int row, int col) 
 #define BTFL_ARROW_FIRST 0x60
 #define BTFL_ARROW_LAST 0x6F
 #define BTFL_OVER_HOME 0x05
+
+// INAV's sixteen direction arrows sit above 0xFF, and it has its own glyph for
+// being close enough to home that a direction is meaningless.
+#define INAV_ARROW_FIRST 0x13C
+#define INAV_ARROW_LAST 0x14B
+#define INAV_HOME_NEAR 0x0A
 
 // Battery icon ranges, full -> empty. The icon beside a voltage is what marks it
 // as battery voltage, and its index is the FC's own coarse charge gauge.
@@ -339,8 +444,50 @@ const char *osd_unit_name(osd_unit_t unit) {
 	case OSD_UNIT_FTPS: return "ft/s";
 	case OSD_UNIT_CELSIUS: return "degC";
 	case OSD_UNIT_FAHRENHEIT: return "degF";
+	case OSD_UNIT_KNOTS: return "kt";
+	case OSD_UNIT_NM: return "NM";
+	case OSD_UNIT_KFT: return "kft";
 	default: return "";
 	}
+}
+
+// First column of the numeric run that ends just before `col`. The marker that
+// picks between two otherwise identical fields sits in front of that run, so
+// with a trailing symbol it cannot be checked until the run is known - and
+// accepting a row optimistically and abandoning it later loses the plain row as
+// a fallback, which is how INAV ground speed went missing behind airspeed.
+static int run_start_left(osd_glyph_getter get, void *ctx, int row, int col) {
+	int c = col - 1;
+	int skipped = 0;
+	while (c >= 0 && skipped < VALUE_MAX_LEADING_BLANKS) {
+		const uint16_t g = get(c, row, ctx);
+		if (g != 0x20 && g != 0)
+			break;
+		c--;
+		skipped++;
+	}
+	int first = col;
+	for (; c >= 0; c--) {
+		char ch[2];
+		if (glyph_to_chars(get(c, row, ctx), ch) == 0)
+			break;
+		first = c;
+	}
+	return first;
+}
+
+// Column of the marker in front of a right-aligned run, or -1. The field is
+// padded to a fixed width, so the marker is not necessarily adjacent to the
+// digits: "%c%3d%c" holding 92 leaves a blank between the two.
+static int marker_col_left(osd_glyph_getter get, void *ctx, int row, int run_first) {
+	int skipped = 0;
+	for (int c = run_first - 1; c >= 0 && skipped <= VALUE_MAX_LEADING_BLANKS; c--) {
+		const uint16_t g = get(c, row, ctx);
+		if (g != 0x20 && g != 0)
+			return c;
+		skipped++;
+	}
+	return -1;
 }
 
 // INAV titles its post-disarm page "*** STATS ***" (or "*** STATS 1/2 -> ***").
@@ -403,12 +550,16 @@ int osd_elements_scan(osd_glyph_getter get,
 				if (anchors[a].glyph != g)
 					continue;
 				if (anchors[a].prefix || anchors[a].infix) {
-					const bool pre_ok = !anchors[a].prefix ||
-										(col > 0 && get(col - 1, row, ctx) ==
-														(uint16_t)anchors[a].prefix);
+					const int before_col =
+						anchors[a].anchor_leads
+							? col - 1
+							: marker_col_left(get, ctx, row, run_start_left(get, ctx, row, col));
+					const bool pre_ok =
+						!anchors[a].prefix ||
+						(before_col >= 0 && get(before_col, row, ctx) == anchors[a].prefix);
 					const bool in_ok = !anchors[a].infix ||
 									   (col + 1 < cols && get(col + 1, row, ctx) ==
-															  (uint16_t)anchors[a].infix);
+															  anchors[a].infix);
 					if (pre_ok && in_ok) {
 						anchor = &anchors[a];
 						lettered = true;
@@ -429,11 +580,16 @@ int osd_elements_scan(osd_glyph_getter get,
 					if (anchors[a].glyph != g)
 						continue;
 					if (anchors[a].infix && col + 1 < cols &&
-						get(col + 1, row, ctx) == (uint16_t)anchors[a].infix)
+						get(col + 1, row, ctx) == anchors[a].infix)
 						letter_variant = true;
-					if (anchors[a].prefix && col > 0 &&
-						get(col - 1, row, ctx) == (uint16_t)anchors[a].prefix)
-						letter_variant = true;
+					if (anchors[a].prefix) {
+						const int bc =
+							anchors[a].anchor_leads
+								? col - 1
+								: marker_col_left(get, ctx, row, run_start_left(get, ctx, row, col));
+						if (bc >= 0 && get(bc, row, ctx) == anchors[a].prefix)
+							letter_variant = true;
+					}
 				}
 				if (letter_variant)
 					continue;
@@ -457,7 +613,7 @@ int osd_elements_scan(osd_glyph_getter get,
 				// holds one row per letter, so a row whose letter is not on
 				// screen is simply the wrong row.
 				if (anchor->infix) {
-					if (c >= cols || get(c, row, ctx) != (uint16_t)anchor->infix)
+					if (c >= cols || get(c, row, ctx) != anchor->infix)
 						continue;
 					c++;
 				}
@@ -509,6 +665,25 @@ int osd_elements_scan(osd_glyph_getter get,
 				continue; // a bare symbol with no number is not an element
 			text[len] = '\0';
 
+			// Where the symbol trails, the marker that says which reading this
+			// is sits before the digits, so it can only be checked now. It is
+			// absorbed below, with the rest of the field.
+			if (!anchor->anchor_leads) {
+				// Across the padding, not just the cell next door: the field is
+				// right-aligned, so a short reading leaves blanks between the
+				// marker and the digits.
+				const int mc = marker_col_left(get, ctx, row, first_col);
+				if (anchor->prefix && (mc < 0 || get(mc, row, ctx) != anchor->prefix))
+					continue;
+				// A field whose only anchor is its unit glyph has to start
+				// clean, or whatever is drawn to its left is read as part of it.
+				// INAV's wind speed ends exactly like its ground speed and is
+				// distinguished by nothing else.
+				if (anchor->strict_start && mc >= 0)
+					continue;
+			}
+			text[len] = '\0';
+
 			// Collapse the split decimal point: two half-dot glyphs meeting
 			// produce "..", which strtof() would stop at.
 			{
@@ -558,10 +733,28 @@ int osd_elements_scan(osd_glyph_getter get,
 			// A unit glyph closes the field. Absorbing it into the run both tells
 			// the widget what to label the number and stops the glyph being left
 			// on screen once the text underneath is cleared.
+			// The unit the anchor itself implies. INAV has a glyph per unit, so
+			// for most of its fields this is the whole answer.
+			e->unit = anchor->unit;
+			e->is_airspeed = anchor->airspeed;
 			if (anchor->trailing_unit && last_col + 1 < cols) {
-				const osd_unit_t u = unit_for_glyph(get(last_col + 1, row, ctx));
+				const uint16_t ug = get(last_col + 1, row, ctx);
+				const osd_unit_t u = is_btfl ? unit_for_glyph(ug) : unit_for_glyph_inav(ug);
 				if (u != OSD_UNIT_NONE) {
 					e->unit = u;
+					last_col++;
+				} else if (!is_btfl && (ug == 0x0B || ug == 0x12)) {
+					// SYM_DEGREES closes heading and ground course, SYM_DB the
+					// SNR. Neither is a unit we carry, but both are part of the
+					// field and have to be absorbed or they are left on screen
+					// beside the widget that replaced it.
+					last_col++;
+				} else if (!is_btfl && ug == 0x13 && e->type == OSD_ELEM_RSSI) {
+					// SYM_DBM. INAV wraps the number in two symbols - SYM_RSSI
+					// in front, the unit behind - so unlike Betaflight there is
+					// nothing to disentangle by magnitude: the field says what
+					// it is.
+					e->type = OSD_ELEM_RSSI_DBM;
 					last_col++;
 				}
 			}
@@ -594,10 +787,21 @@ int osd_elements_scan(osd_glyph_getter get,
 				}
 			}
 
-			// The letter before the symbol belongs to the field too - leaving it
-			// behind puts a stray "C" beside the widget that replaced it.
-			if (anchor->prefix && first_col > 0)
-				first_col--;
+			// The marker before the field belongs to it too - leaving it behind
+			// puts a stray "C", or an air-speed glyph, beside the widget that
+			// replaced it.
+			if (anchor->prefix && first_col > 0) {
+				if (anchor->anchor_leads) {
+					first_col--;
+				} else {
+					// Right-aligned, so the marker may be a cell or two clear of
+					// the digits. Take everything from it inwards, padding
+					// included, or the blanks between are left uncleared.
+					const int mc = marker_col_left(get, ctx, row, first_col);
+					if (mc >= 0)
+						first_col = mc;
+				}
+			}
 			if (anchor->infix == 'a')
 				e->is_airspeed = true;
 
@@ -622,6 +826,8 @@ int osd_elements_scan(osd_glyph_getter get,
 
 			if (tx_power_in_watts && e->value_valid)
 				e->value *= 1000.0f;
+			if (anchor->scale != 0.0f && e->value_valid)
+				e->value *= anchor->scale;
 
 			// Both cell and pack voltage are marked with SYM_VOLT, so magnitude
 			// is the only available discriminator. A 1S pack is genuinely
@@ -862,15 +1068,18 @@ int osd_elements_scan(osd_glyph_getter get,
 	// followed by three digits. So the digits are the discriminator, and neither
 	// needs a table entry of its own.
 	//
-	// Only Betaflight for now - INAV's arrow block sits elsewhere in its font and
-	// is not confirmed here, and a wrong range would turn ordinary glyphs into
-	// widgets.
-	if (is_btfl) {
+	// INAV draws only the arrow - its numerical heading has a symbol of its own
+	// and is in the table above - so the digit check below simply never fires
+	// there, and the same code covers both firmwares.
+	{
+		const uint16_t arrow_first = is_btfl ? BTFL_ARROW_FIRST : INAV_ARROW_FIRST;
+		const uint16_t arrow_last = is_btfl ? BTFL_ARROW_LAST : INAV_ARROW_LAST;
+		const uint16_t near_home = is_btfl ? BTFL_OVER_HOME : INAV_HOME_NEAR;
 		for (int row = 0; row < rows && found < max_out; row++) {
 			for (int col = 0; col < cols && found < max_out; col++) {
 				const uint16_t g = get(col, row, ctx);
-				const bool is_arrow = (g >= BTFL_ARROW_FIRST && g <= BTFL_ARROW_LAST);
-				if (!is_arrow && g != BTFL_OVER_HOME)
+				const bool is_arrow = (g >= arrow_first && g <= arrow_last);
+				if (!is_arrow && g != near_home)
 					continue;
 				if (cell_claimed(out, found, row, col))
 					continue;

@@ -506,6 +506,161 @@ int main(void) {
     n = osd_elements_scan(getter, NULL, COLS, ROWS, "INAV", els, 32);
     check("INAV is not scanned for literal fields", n == 0);
 
+    // --- INAV, against src/main/io/osd.c and src/main/drivers/osd_symbols.h.
+    //
+    // INAV encodes the unit in the symbol rather than appending one, and several
+    // of its fields have no symbol of their own at all - osdFormatVelocityStr
+    // writes "%3d%c", so the unit glyph is the only anchor there is.
+
+    clear_grid();
+    { uint16_t g[] = {' ','8','7',0x90}; put(6, 2, g, 4); }
+    n = osd_elements_scan(getter, NULL, COLS, ROWS, "INAV", els, 32);
+    check("INAV ground speed off its unit glyph", n == 1 && els[0].type == OSD_ELEM_SPEED &&
+        els[0].value > 86.9f && els[0].value < 87.1f && els[0].unit == OSD_UNIT_KPH);
+    check("INAV ground speed is not airspeed", n == 1 && !els[0].is_airspeed);
+
+    // SYM_AIR in front of an otherwise identical field is what makes it airspeed.
+    clear_grid();
+    { uint16_t g[] = {0x8C,' ','9','2',0x90}; put(6, 2, g, 5); }
+    n = osd_elements_scan(getter, NULL, COLS, ROWS, "INAV", els, 32);
+    check("INAV airspeed by its SYM_AIR", n == 1 && els[0].type == OSD_ELEM_SPEED &&
+        els[0].is_airspeed);
+    check("INAV airspeed absorbs SYM_AIR", n == 1 && els[0].width == 5);
+
+    // Wind speed ends identically - digits then the same unit glyph - and is
+    // only told apart by what sits in front of it.
+    clear_grid();
+    { uint16_t g[] = {0x86,0x18,'4','.','2',0x90}; put(6, 2, g, 6); }
+    n = osd_elements_scan(getter, NULL, COLS, ROWS, "INAV", els, 32);
+    check("INAV wind is not read as ground speed", n == 0);
+
+    // And with the padding a short reading leaves, which puts a blank between
+    // the wind symbols and the digits - looking only at the cell next door
+    // would see that blank and let it through.
+    clear_grid();
+    { uint16_t g[] = {0x86,0x18,' ','4',0x90}; put(6, 2, g, 5); }
+    n = osd_elements_scan(getter, NULL, COLS, ROWS, "INAV", els, 32);
+    check("INAV padded wind is still not ground speed", n == 0);
+
+    clear_grid();
+    { uint16_t g[] = {'2','.','4',0x8F}; put(7, 2, g, 4); }
+    n = osd_elements_scan(getter, NULL, COLS, ROWS, "INAV", els, 32);
+    check("INAV climb rate", n == 1 && els[0].type == OSD_ELEM_VARIO &&
+        els[0].unit == OSD_UNIT_MPS);
+
+    clear_grid();
+    { uint16_t g[] = {'4','1','2',0x71}; put(8, 2, g, 4); }
+    n = osd_elements_scan(getter, NULL, COLS, ROWS, "INAV", els, 32);
+    check("INAV power in watts", n == 1 && els[0].type == OSD_ELEM_POWER &&
+        els[0].value > 411.0f);
+
+    // Above a kilowatt INAV swaps the glyph and rescales the number with it.
+    clear_grid();
+    { uint16_t g[] = {'1','.','2',0x73}; put(8, 2, g, 4); }
+    n = osd_elements_scan(getter, NULL, COLS, ROWS, "INAV", els, 32);
+    check("INAV kilowatts scaled to watts", n == 1 && els[0].type == OSD_ELEM_POWER &&
+        els[0].value > 1199.0f && els[0].value < 1201.0f);
+
+    clear_grid();
+    { uint16_t g[] = {0x10,'4','2','0',0x7A}; put(9, 2, g, 5); }
+    n = osd_elements_scan(getter, NULL, COLS, ROWS, "INAV", els, 32);
+    check("INAV home distance", n == 1 && els[0].type == OSD_ELEM_HOME_DISTANCE &&
+        els[0].unit == OSD_UNIT_METRES && els[0].width == 5);
+
+    clear_grid();
+    { uint16_t g[] = {0x75,'1','.','2','4',0x7E}; put(10, 2, g, 6); }
+    n = osd_elements_scan(getter, NULL, COLS, ROWS, "INAV", els, 32);
+    check("INAV trip distance in km", n == 1 && els[0].type == OSD_ELEM_TOTAL_DISTANCE &&
+        els[0].unit == OSD_UNIT_KM);
+
+    // Heading and ground course are the same shape and differ only in the
+    // leading symbol. Both close with SYM_DEGREES, which has to be absorbed.
+    clear_grid();
+    { uint16_t g[] = {0x0C,'2','7','4',0x0B}; put(11, 2, g, 5); }
+    n = osd_elements_scan(getter, NULL, COLS, ROWS, "INAV", els, 32);
+    check("INAV heading", n == 1 && els[0].type == OSD_ELEM_HEADING &&
+        els[0].value > 273.9f && els[0].value < 274.1f);
+    check("INAV heading absorbs SYM_DEGREES", n == 1 && els[0].width == 5);
+
+    clear_grid();
+    { uint16_t g[] = {0xDC,'2','8','9',0x0B}; put(11, 2, g, 5); }
+    n = osd_elements_scan(getter, NULL, COLS, ROWS, "INAV", els, 32);
+    check("INAV ground course", n == 1 && els[0].type == OSD_ELEM_HEADING &&
+        els[0].value > 288.9f);
+
+    clear_grid();
+    { uint16_t g[] = {0x02,'9','9'}; put(12, 2, g, 3); }
+    n = osd_elements_scan(getter, NULL, COLS, ROWS, "INAV", els, 32);
+    check("INAV link quality", n == 1 && els[0].type == OSD_ELEM_LINK_QUALITY);
+
+    // dBm is wrapped in two symbols, so unlike Betaflight nothing has to be
+    // guessed from the magnitude: SYM_RSSI in front, SYM_DBM behind.
+    clear_grid();
+    { uint16_t g[] = {0x01,' ','-','9','4',0x13}; put(13, 2, g, 6); }
+    n = osd_elements_scan(getter, NULL, COLS, ROWS, "INAV", els, 32);
+    check("INAV dBm is not a percentage", n == 1 && els[0].type == OSD_ELEM_RSSI_DBM &&
+        els[0].value < -93.9f);
+    check("INAV dBm is one element, not two", n == 1 && els[0].width == 6);
+
+    // The same symbol without the unit really is a percentage.
+    clear_grid();
+    { uint16_t g[] = {0x01,'8','5'}; put(13, 2, g, 3); }
+    n = osd_elements_scan(getter, NULL, COLS, ROWS, "INAV", els, 32);
+    check("INAV RSSI percent", n == 1 && els[0].type == OSD_ELEM_RSSI);
+
+    clear_grid();
+    { uint16_t g[] = {0x14,'-','6',0x12}; put(14, 2, g, 4); }
+    n = osd_elements_scan(getter, NULL, COLS, ROWS, "INAV", els, 32);
+    check("INAV SNR", n == 1 && els[0].type == OSD_ELEM_SNR && els[0].width == 4);
+
+    clear_grid();
+    { uint16_t g[] = {0xBC,'1','.','8'}; put(15, 2, g, 4); }
+    n = osd_elements_scan(getter, NULL, COLS, ROWS, "INAV", els, 32);
+    check("INAV g-force", n == 1 && els[0].type == OSD_ELEM_GFORCE &&
+        els[0].value > 1.79f && els[0].value < 1.81f);
+
+    clear_grid();
+    { uint16_t g[] = {0xC2,' ','4','2',0x97}; put(16, 2, g, 5); }
+    n = osd_elements_scan(getter, NULL, COLS, ROWS, "INAV", els, 32);
+    check("INAV temperature", n == 1 && els[0].type == OSD_ELEM_TEMPERATURE &&
+        els[0].unit == OSD_UNIT_CELSIUS);
+
+    clear_grid();
+    { uint16_t g[] = {0xC3,' ','6','8',0x97}; put(16, 2, g, 5); }
+    n = osd_elements_scan(getter, NULL, COLS, ROWS, "INAV", els, 32);
+    check("INAV ESC temperature", n == 1 && els[0].type == OSD_ELEM_TEMPERATURE &&
+        els[0].value > 67.9f);
+
+    clear_grid();
+    { uint16_t g[] = {'1','8','0',0x22}; put(17, 2, g, 4); }
+    n = osd_elements_scan(getter, NULL, COLS, ROWS, "INAV", els, 32);
+    check("INAV efficiency", n == 1 && els[0].type == OSD_ELEM_EFFICIENCY &&
+        els[0].unit == OSD_UNIT_KM);
+
+    // INAV's altitude glyphs say the unit outright.
+    clear_grid();
+    { uint16_t g[] = {' ','1','3','9',0x76}; put(18, 2, g, 5); }
+    n = osd_elements_scan(getter, NULL, COLS, ROWS, "INAV", els, 32);
+    check("INAV altitude in metres", n == 1 && els[0].type == OSD_ELEM_ALTITUDE &&
+        els[0].unit == OSD_UNIT_METRES);
+
+    clear_grid();
+    { uint16_t g[] = {'1','.','2',0x77}; put(18, 2, g, 4); }
+    n = osd_elements_scan(getter, NULL, COLS, ROWS, "INAV", els, 32);
+    check("INAV altitude scaled to km", n == 1 && els[0].type == OSD_ELEM_ALTITUDE &&
+        els[0].unit == OSD_UNIT_KM);
+
+    // INAV's direction arrows live above 0xFF, well clear of Betaflight's.
+    clear_grid();
+    { uint16_t g[] = {0x140}; put(19, 25, g, 1); }
+    n = osd_elements_scan(getter, NULL, COLS, ROWS, "INAV", els, 32);
+    check("INAV home arrow", n == 1 && els[0].type == OSD_ELEM_HOME_ARROW);
+
+    clear_grid();
+    { uint16_t g[] = {0x140}; put(19, 25, g, 1); }
+    n = osd_elements_scan(getter, NULL, COLS, ROWS, "BTFL", els, 32);
+    check("BTFL ignores the INAV arrow block", n == 0);
+
     printf("\n%s (%d failure%s)\n", fails ? "FAILURES" : "ALL PASS", fails, fails == 1 ? "" : "s");
     return fails != 0;
 }

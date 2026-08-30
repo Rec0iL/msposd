@@ -88,6 +88,9 @@ typedef enum {
 	OSD_UNIT_FTPS,
 	OSD_UNIT_CELSIUS,
 	OSD_UNIT_FAHRENHEIT,
+	OSD_UNIT_KNOTS,
+	OSD_UNIT_NM,  // nautical miles
+	OSD_UNIT_KFT, // thousands of feet, which INAV switches to on its own
 } osd_unit_t;
 
 typedef struct {
