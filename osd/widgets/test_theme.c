@@ -102,6 +102,38 @@ int main(void) {
     osd_theme_defaults(&t); osd_theme_load(&t, "/tmp/_s2.ini");
     check("bad scale keeps default", osd_theme_element_scale(&t, OSD_ELEM_VOLTAGE) > 0.99f);
 
+    // The panel shape is a shape, not a dimension: a theme wanting squares has to
+    // switch the path rather than dial the notch to zero, because the notch is a
+    // third of the top edge and the value sits in the raised part beside it.
+    osd_theme_defaults(&t);
+    check("panel shape defaults to notched", t.panel_shape == OSD_PANEL_NOTCHED);
+    f = fopen("/tmp/_sh.ini", "w");
+    fputs("[theme]\npanel_shape = square\n", f); fclose(f);
+    osd_theme_load(&t, "/tmp/_sh.ini");
+    check("square shape parsed", t.panel_shape == OSD_PANEL_SQUARE);
+    // A shape we do not know keeps the current one: a typo must not silently
+    // restyle the OSD back to something the user did not ask for.
+    f = fopen("/tmp/_sh2.ini", "w");
+    fputs("[theme]\npanel_shape = hexagon\n", f); fclose(f);
+    osd_theme_load(&t, "/tmp/_sh2.ini");
+    check("an unknown shape is ignored", t.panel_shape == OSD_PANEL_SQUARE);
+
+    // And the shipped theme that uses it.
+    {
+        osd_theme_t orchid, base;
+        osd_theme_defaults(&orchid);
+        osd_theme_defaults(&base);
+        check("orchid loads", osd_theme_load(&orchid, "themes/orchid/theme.ini"));
+        check("orchid is square", orchid.panel_shape == OSD_PANEL_SQUARE);
+        check("orchid hatching does not lean", orchid.hatch_slant == 0.0f);
+        check("orchid recoloured its chrome", orchid.accent != base.accent);
+        // The three status colours are deliberately left alone - they are what a
+        // pilot reads out of the corner of an eye, and a palette is no reason to
+        // make "turn back now" a different colour than everywhere else.
+        check("orchid keeps warn amber", OSD_R(orchid.warn) > 0xE0 && OSD_G(orchid.warn) > 0x90);
+        check("orchid keeps crit red", OSD_R(orchid.crit) > 0xE0 && OSD_G(orchid.crit) < 0x90);
+    }
+
     printf("\n%s (%d failure%s)\n", fails ? "FAILURES" : "ALL PASS", fails, fails==1?"":"s");
     return fails != 0;
 }

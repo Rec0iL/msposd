@@ -357,7 +357,17 @@ static void draw_mode_icon(osd_surface_t *s, const char *mode, float x, float y,
 
 // Tab step top-left, square top-right so the value can sit there, chamfer
 // bottom-right. See design notes: chamfers must never cross the value's box.
-static void panel_path(osd_pointf_t *p, float x, float y, float w, float h, float tab, float ch) {
+// The panel outline. Returns how many points it wrote, because the two shapes
+// do not have the same number of corners.
+static int panel_path(
+	osd_pointf_t *p, float x, float y, float w, float h, float tab, float ch, int shape) {
+	if (shape == OSD_PANEL_SQUARE) {
+		p[0] = (osd_pointf_t){x, y};
+		p[1] = (osd_pointf_t){x + w, y};
+		p[2] = (osd_pointf_t){x + w, y + h};
+		p[3] = (osd_pointf_t){x, y + h};
+		return 4;
+	}
 	float step = w * 0.34f;
 	p[0] = (osd_pointf_t){x, y + tab};
 	p[1] = (osd_pointf_t){x + step - 28.0f, y + tab};
@@ -366,6 +376,15 @@ static void panel_path(osd_pointf_t *p, float x, float y, float w, float h, floa
 	p[4] = (osd_pointf_t){x + w, y + h - ch};
 	p[5] = (osd_pointf_t){x + w - ch, y + h};
 	p[6] = (osd_pointf_t){x, y + h};
+	return 7;
+}
+
+// Where the label's baseline sits below the panel's top. Shared by the height
+// calculation and the drawing, because they disagreed: the height allowed for
+// the label's size but not for the gap above it, so on a theme with small
+// padding the descenders ran into the bottom border.
+static float label_baseline_offset(const osd_theme_t *th, float scale) {
+	return (th->tab_height + th->label_size + 12.0f) * scale;
 }
 
 // Panel size, shared by the collision pass and the drawing pass so the
@@ -380,7 +399,27 @@ static void measure_panel(const osd_theme_t *th, osd_font_t *font, const osd_ele
 	if (sub_txt[0])
 		osd_text_measure(font, th->value_size * 0.69f * scale, sub_txt, &sm);
 
-	float need = (float)(mm.width + sm.width) + th->pad_x * scale * 2.0f + 96.0f * scale;
+	// Sized to what is actually in it, rather than to the value plus a fixed
+	// 96px of slack. That constant was most of the empty space on a panel
+	// holding a short reading, and no theme could get rid of it - a compact
+	// theme could only lower the floor underneath and still get the padding.
+	//
+	// Two rows have to fit: the value, right-aligned and possibly preceded by an
+	// icon, and the label under it, which is tracked and therefore wider than
+	// its glyphs suggest.
+	float icon_w = 0.0f;
+	if (e->type == OSD_ELEM_SATS || e->type == OSD_ELEM_FLIGHT_MODE)
+		icon_w = th->tab_height * scale + th->pad_x * scale;
+
+	osd_text_metrics_t lm = {0};
+	const char *lbl = label_for(e);
+	if (lbl[0])
+		osd_text_measure_tracked(
+			font, th->label_size * scale, lbl, th->label_tracking * scale, &lm);
+
+	const float value_row = icon_w + (float)(mm.width + sm.width) + th->pad_x * scale * 2.0f;
+	const float label_row = (float)lm.width + th->pad_x * scale * 2.0f;
+	float need = value_row > label_row ? value_row : label_row;
 	float min_w = th->panel_min_width * scale;
 	*out_w = need > min_w ? need : min_w;
 
@@ -396,7 +435,7 @@ static void measure_panel(const osd_theme_t *th, osd_font_t *font, const osd_ele
 	if (frac >= 0.0f)
 		*out_h = th->panel_height * scale;
 	else if (has_label)
-		*out_h = th->tab_height * scale + th->label_size * scale + th->pad_y * scale * 2.0f;
+		*out_h = label_baseline_offset(th, scale) + th->pad_y * scale;
 	else // icon-only: just the tab, nothing below it to make room for
 		*out_h = th->tab_height * scale + th->pad_y * scale;
 }
@@ -457,15 +496,32 @@ static void draw_one(osd_surface_t *s, const osd_theme_t *th, osd_font_t *font,
 	}
 
 	osd_pointf_t poly[7];
-	panel_path(poly, px, py, w, h, tab_h, chamfer);
-	osd_fill_poly(s, poly, 7, fill);
-	osd_stroke_poly(s, poly, 7, 1.5f, edge);
+	const int pn = panel_path(poly, px, py, w, h, tab_h, chamfer, th->panel_shape);
+	osd_fill_poly(s, poly, pn, fill);
+	osd_stroke_poly(s, poly, pn, 1.5f, edge);
 
-	// accent corner marks
-	osd_draw_line(s, px, py + h - 18.0f * scale, px, py + h, 2.5f, accent);
-	osd_draw_line(s, px, py + h, px + 26.0f * scale, py + h, 2.5f, accent);
-	osd_draw_line(s, px + w, py + h - chamfer - 12.0f * scale, px + w, py + h - chamfer, 2.5f, accent);
-	osd_draw_line(s, px + w, py + h - chamfer, px + w - chamfer, py + h, 2.5f, accent);
+	// Accent corner marks. The notched shape follows its own cut corner, which
+	// is a diagonal; the square one gets right-angled brackets instead, because
+	// a diagonal across a square corner is exactly the thing a square theme is
+	// trying not to have.
+	if (th->panel_shape == OSD_PANEL_SQUARE) {
+		// Inset by half the stroke, so the brackets sit inside the panel rather
+		// than straddling its border - on a square edge the overhang is plainly
+		// visible where a cut corner hid it.
+		const float arm = 20.0f * scale;
+		const float in = 1.25f;
+		const float l = px + in, r = px + w - in, b = py + h - in;
+		osd_draw_line(s, l, b - arm, l, b, 2.5f, accent);
+		osd_draw_line(s, l, b, l + arm, b, 2.5f, accent);
+		osd_draw_line(s, r - arm, b, r, b, 2.5f, accent);
+		osd_draw_line(s, r, b - arm, r, b, 2.5f, accent);
+	} else {
+		osd_draw_line(s, px, py + h - 18.0f * scale, px, py + h, 2.5f, accent);
+		osd_draw_line(s, px, py + h, px + 26.0f * scale, py + h, 2.5f, accent);
+		osd_draw_line(
+			s, px + w, py + h - chamfer - 12.0f * scale, px + w, py + h - chamfer, 2.5f, accent);
+		osd_draw_line(s, px + w, py + h - chamfer, px + w - chamfer, py + h, 2.5f, accent);
+	}
 
 	// value, right aligned inside the tab
 	int right = (int)(px + w - pad_x);
@@ -485,7 +541,7 @@ static void draw_one(osd_surface_t *s, const osd_theme_t *th, osd_font_t *font,
 
 	if (label_for(e)[0] != '\0')
 		osd_text_draw_tracked(s, font, label_size, (int)(px + pad_x),
-			(int)(py + tab_h + label_size + 12.0f * scale), label_for(e), label_tracking, label);
+			(int)(py + label_baseline_offset(th, scale)), label_for(e), label_tracking, label);
 
 	// bar
 	if (frac >= 0.0f) {
@@ -1272,6 +1328,7 @@ int osd_widgets_draw_all(osd_surface_t *s, const osd_theme_t *th, osd_font_t *fo
 			lp.style = (osd_link_style_t)th->link_style;
 			lp.scale = th->link_scale * th->global_scale;
 			lp.show_antennas = th->link_antennas;
+			lp.square = (th->panel_shape == OSD_PANEL_SQUARE);
 			lp.accent = osd_theme_apply_opacity(th->accent, op);
 			lp.label = osd_theme_apply_opacity(th->label, op);
 			lp.good = osd_theme_apply_opacity(th->good, op);

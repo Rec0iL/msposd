@@ -37,6 +37,15 @@ typedef struct {
 	osd_color_t accent, warn, crit, good, threat;
 	osd_color_t panel_fill, panel_edge, track, label, peak;
 
+	// The panel outline. The tactical shape steps its top-left corner down and
+	// cuts the bottom-right one away; the square shape does neither.
+	//
+	// This is a shape rather than a set of numbers because the step is not a
+	// dimension you can dial to zero - it is a notch a third of the way across
+	// the top edge, and the value sits in the raised part beside it. A theme
+	// that wants clean rectangles has to switch the path, not shrink it.
+	enum { OSD_PANEL_NOTCHED = 0, OSD_PANEL_SQUARE = 1 } panel_shape;
+
 	// geometry, in pixels unless noted
 	float panel_min_width, panel_height, tab_height, chamfer;
 	float pad_x, pad_y, bar_height;

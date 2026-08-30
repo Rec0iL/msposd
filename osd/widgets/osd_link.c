@@ -35,7 +35,23 @@ static osd_color_t snr_colour(const osd_link_params_t *p, int db) {
 // Same idea as the panels: a plate with the top-left corner stepped and the
 // bottom-right cut away.
 static void plate(osd_surface_t *s, float x, float y, float w, float h, float tab, float ch,
-	osd_color_t fill, osd_color_t edge, osd_color_t accent) {
+	bool square, osd_color_t fill, osd_color_t edge, osd_color_t accent) {
+	if (square) {
+		const osd_pointf_t poly[4] = {{x, y}, {x + w, y}, {x + w, y + h}, {x, y + h}};
+		osd_fill_poly(s, poly, 4, fill);
+		osd_stroke_poly(s, poly, 4, 1.5f, edge);
+		// Right-angled brackets: a diagonal across a square corner is the thing
+		// a square theme is trying not to have.
+		// Inset by half the stroke: on a square edge an overhang is plainly
+		// visible where a cut corner hid it.
+		const float arm = 20.0f;
+		const float l = x + 1.25f, r = x + w - 1.25f, b = y + h - 1.25f;
+		osd_draw_line(s, l, b - arm, l, b, 2.5f, accent);
+		osd_draw_line(s, l, b, l + arm, b, 2.5f, accent);
+		osd_draw_line(s, r - arm, b, r, b, 2.5f, accent);
+		osd_draw_line(s, r, b - arm, r, b, 2.5f, accent);
+		return;
+	}
 	const float step = w * 0.34f;
 	const osd_pointf_t poly[7] = {{x, y + tab}, {x + step - 28.0f, y + tab}, {x + step, y},
 		{x + w, y}, {x + w, y + h - ch}, {x + w - ch, y + h}, {x, y + h}};
@@ -184,7 +200,8 @@ void osd_link_measure(const osd_link_params_t *p, const osd_link_stats_t *s, osd
 			if (full[0]) {
 				osd_text_metrics_t m = {0};
 				osd_text_measure(font, p->label_size * 1.15f * k, full, &m);
-				const float w_for_header = ((float)m.width + px * 2.0f) / (1.0f - 0.34f);
+				const float notch = p->square ? 1.0f : (1.0f - 0.34f);
+				const float w_for_header = ((float)m.width + px * 2.0f) / notch;
 				if (w_for_header > need)
 					need = w_for_header;
 			}
@@ -301,7 +318,7 @@ void osd_link_draw(osd_surface_t *s, osd_font_t *font, float x, float y,
 
 	const float tab = LINK_HEAD_H * k * 0.82f;
 	const float ch = p->chamfer * k;
-	plate(s, x, y, w, h, tab, ch, p->fill, p->edge, p->accent);
+	plate(s, x, y, w, h, tab, ch, p->square, p->fill, p->edge, p->accent);
 
 	const float px = p->pad_x * k;
 	const float label_sz = p->label_size * k;
@@ -316,7 +333,9 @@ void osd_link_draw(osd_surface_t *s, osd_font_t *font, float x, float y,
 	// source caption sits in the stepped corner to the left of it, so the space
 	// available starts after the step rather than at the plate's edge.
 	{
-		const float step = w * 0.34f;
+		// Without the notch there is no raised part to start after: the caption
+		// and the tuning share one line across the whole plate.
+		const float step = p->square ? 0.0f : w * 0.34f;
 		const float tune_sz = label_sz * 1.15f;
 		char tune[96];
 		tuning_text(st, p->style, font, tune_sz, w - step - px * 2.0f, tune, sizeof(tune));

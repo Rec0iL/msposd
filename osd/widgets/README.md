@@ -56,6 +56,23 @@ at 999 -> 1000; the widget is placed against `anchor_col` - the symbol cell,
 which does not move - and the layout signature is keyed on it too, so a digit
 crossing no longer forces a full relayout.
 
+## Themes
+
+Two ship: **Tactical**, the cyan one with the stepped and cut corners, and
+**Orchid**, violet and built entirely out of rectangles.
+
+`panel_shape` is a shape rather than a set of numbers, which is the one thing
+worth knowing about it. The notch is a third of the way along the top edge with
+the value sitting in the raised part beside it — there is nothing to dial to
+zero, so a theme that wants clean rectangles switches the path. Setting it also
+squares off the corner marks, which would otherwise draw a diagonal across a
+square corner.
+
+What Orchid deliberately does *not* restyle is `good`, `warn` and `crit`. Those
+three are what a pilot reads out of the corner of an eye, and a palette is no
+reason for "turn back now" to be a different colour than it is everywhere else.
+Only the chrome — accent, label, plate, edge, track — goes violet.
+
 ## Two of the same kind on screen
 
 Nothing stops a pilot placing two elements of one type - Betaflight draws core

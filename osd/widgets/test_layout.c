@@ -184,6 +184,12 @@ int main(void) {
 	{
 		osd_theme_t narrow = th;
 		narrow.panel_min_width = 40.0f;
+		// The label has to be out of the way for the value to drive the width at
+		// all: a panel is sized to fit both rows, and "CAPACITY USED" is wider
+		// than any mAh reading. Without this the width is label-driven and
+		// constant, and the check below would be asserting nothing.
+		narrow.label_size = 4.0f;
+		narrow.label_tracking = 0.0f;
 		osd_widget_state_t st;
 		osd_widgets_state_init(&st);
 		placed_t p[3];

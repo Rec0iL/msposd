@@ -105,6 +105,10 @@ typedef struct {
 	float outline_px;
 
 	// Panel geometry, taken from the theme so the widget matches the others.
+	// `square` drops the stepped corner and the cut one, for a theme built out
+	// of rectangles; the header caption then sits inside the plate rather than
+	// in the notch beside it.
+	bool square;
 	float pad_x, pad_y, chamfer, bar_height;
 	float value_size, label_size, label_tracking;
 } osd_link_params_t;

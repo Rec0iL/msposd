@@ -60,6 +60,7 @@ void osd_theme_defaults(osd_theme_t *t) {
 	t->label_size = 11.0f;
 	t->label_tracking = 2.5f;
 
+	t->panel_shape = OSD_PANEL_NOTCHED;
 	t->text_outline = true;
 	t->text_outline_color = OSD_ARGB(0xC0, 0x00, 0x00, 0x00);
 	t->text_outline_width = 1;
@@ -260,7 +261,12 @@ static void apply_kv(osd_theme_t *t, const char *section, const char *key, const
 			t->label_size = clampf(f, 4.0f, 200.0f);
 		else if (!strcasecmp(key, "label_tracking") && parse_float(val, &f))
 			t->label_tracking = clampf(f, -10.0f, 40.0f);
-		else if (!strcasecmp(key, "text_outline") && parse_bool(val, &b))
+		else if (!strcasecmp(key, "panel_shape")) {
+			if (!strcasecmp(val, "square"))
+				t->panel_shape = OSD_PANEL_SQUARE;
+			else if (!strcasecmp(val, "notched"))
+				t->panel_shape = OSD_PANEL_NOTCHED;
+		} else if (!strcasecmp(key, "text_outline") && parse_bool(val, &b))
 			t->text_outline = b;
 		else if (!strcasecmp(key, "text_outline_color") && parse_color(val, &rgba))
 			t->text_outline_color = rgba;
