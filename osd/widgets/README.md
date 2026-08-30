@@ -56,6 +56,21 @@ at 999 -> 1000; the widget is placed against `anchor_col` - the symbol cell,
 which does not move - and the layout signature is keyed on it too, so a digit
 crossing no longer forces a full relayout.
 
+## Two of the same kind on screen
+
+Nothing stops a pilot placing two elements of one type - Betaflight draws core
+and ESC temperature with the same symbol, and several fields have variants meant
+to be shown side by side. The cache and the resolved layout are therefore keyed
+on `(type, row, anchor_col)`, one slot per element *instance*, not per type.
+
+Keyed on type alone the two shared a slot: each frame overwrote the other, so
+both flickered and neither held its position. `anchor_col` is the edge the flight
+controller keeps still, so the key survives a reading going from 99 to 100.
+
+Callers ask `osd_widgets_placement()` where something ended up rather than
+indexing by type. Where only one instance can mean anything - the map's corner
+coordinates, the fix the home bearing is measured from - the first live one wins.
+
 ## End-to-end check
 
 `preview_live.c` builds a glyph grid exactly as a flight controller would send

@@ -19,36 +19,85 @@ typedef struct {
 	osd_element_type_t type;
 	bool anchor_leads; // symbol sits before the number
 	value_kind_t kind;
+	// The field ends in a unit glyph - metres, km/h, degrees C. Reading it tells
+	// the widget what to label the number, and absorbing it keeps the glyph from
+	// being left on screen beside the widget. Betaflight writes one on every
+	// converted quantity; INAV encodes the unit in the symbol itself instead.
+	bool trailing_unit;
+	// Letters the firmware writes around the symbol, which have to be stepped
+	// over rather than parsed. Betaflight puts them on both sides: temperature
+	// is "C<sym>42<unit>" with the letter *before*, airspeed is "<sym>a92<unit>"
+	// with it after. The table holds one row per letter, so a row whose letter is
+	// not on screen is simply the wrong row. 0 for none.
+	char prefix; // in the cell before the symbol
+	char infix;  // between the symbol and the digits
 } osd_anchor_t;
 
+// Betaflight converts to the pilot's configured units before drawing and marks
+// the result, so the unit is read off the screen rather than assumed.
+static osd_unit_t unit_for_glyph(uint16_t g) {
+	switch (g) {
+	case 0x0C: return OSD_UNIT_METRES;     // SYM_M
+	case 0x0F: return OSD_UNIT_FEET;       // SYM_FT
+	case 0x7D: return OSD_UNIT_KM;         // SYM_KM
+	case 0x7E: return OSD_UNIT_MILES;      // SYM_MILES
+	case 0x9E: return OSD_UNIT_KPH;        // SYM_KPH
+	case 0x9D: return OSD_UNIT_MPH;        // SYM_MPH
+	case 0x9F: return OSD_UNIT_MPS;        // SYM_MPS
+	case 0x99: return OSD_UNIT_FTPS;       // SYM_FTPS
+	case 0x0E: return OSD_UNIT_CELSIUS;    // SYM_C
+	case 0x0D: return OSD_UNIT_FAHRENHEIT; // SYM_F
+	default: return OSD_UNIT_NONE;
+	}
+}
+
+// INAV encodes the unit in the symbol itself - SYM_ALT_M and SYM_ALT_FT are
+// different glyphs - so nothing here carries a trailing unit.
 static const osd_anchor_t kAnchorsInav[] = {
-	{0x1F, 0, OSD_ELEM_VOLTAGE, false, VAL_NUMBER},      // SYM_VOLT
-	{0x6A, 0, OSD_ELEM_CURRENT, false, VAL_NUMBER},      // SYM_AMP
-	{0x99, 0, OSD_ELEM_MAH, false, VAL_NUMBER},          // SYM_MAH
-	{0x76, 0, OSD_ELEM_ALTITUDE, false, VAL_NUMBER},     // SYM_ALT_M
-	{0x78, 0, OSD_ELEM_ALTITUDE, false, VAL_NUMBER},     // SYM_ALT_FT
-	{0x03, 0, OSD_ELEM_LATITUDE, true, VAL_NUMBER},      // SYM_LAT
-	{0x04, 0, OSD_ELEM_LONGITUDE, true, VAL_NUMBER},     // SYM_LON
-	{0x01, 0, OSD_ELEM_RSSI, true, VAL_NUMBER},          // SYM_RSSI
-	{0x09, 0x08, OSD_ELEM_SATS, true, VAL_NUMBER},       // SYM_SAT_R, icon SYM_SAT_L
-	{0x95, 0, OSD_ELEM_THROTTLE, true, VAL_NUMBER},      // SYM_THR
-	{0x9F, 0, OSD_ELEM_FLIGHT_TIME, true, VAL_TIME},     // SYM_FLY_M
-	{0x9E, 0, OSD_ELEM_FLIGHT_TIME, true, VAL_TIME},     // SYM_ON_M
-	{0xA0, 0, OSD_ELEM_FLIGHT_TIME, true, VAL_TIME},     // SYM_CLOCK
+	{0x1F, 0, OSD_ELEM_VOLTAGE, false, VAL_NUMBER, false, 0, 0},  // SYM_VOLT
+	{0x6A, 0, OSD_ELEM_CURRENT, false, VAL_NUMBER, false, 0, 0},  // SYM_AMP
+	{0x99, 0, OSD_ELEM_MAH, false, VAL_NUMBER, false, 0, 0},      // SYM_MAH
+	{0x76, 0, OSD_ELEM_ALTITUDE, false, VAL_NUMBER, false, 0, 0}, // SYM_ALT_M
+	{0x78, 0, OSD_ELEM_ALTITUDE, false, VAL_NUMBER, false, 0, 0}, // SYM_ALT_FT
+	{0x03, 0, OSD_ELEM_LATITUDE, true, VAL_NUMBER, false, 0, 0},  // SYM_LAT
+	{0x04, 0, OSD_ELEM_LONGITUDE, true, VAL_NUMBER, false, 0, 0}, // SYM_LON
+	{0x01, 0, OSD_ELEM_RSSI, true, VAL_NUMBER, false, 0, 0},      // SYM_RSSI
+	{0x09, 0x08, OSD_ELEM_SATS, true, VAL_NUMBER, false, 0, 0},   // SYM_SAT_R, icon SYM_SAT_L
+	{0x95, 0, OSD_ELEM_THROTTLE, true, VAL_NUMBER, false, 0, 0},  // SYM_THR
+	{0x9F, 0, OSD_ELEM_FLIGHT_TIME, true, VAL_TIME, false, 0, 0}, // SYM_FLY_M
+	{0x9E, 0, OSD_ELEM_FLIGHT_TIME, true, VAL_TIME, false, 0, 0}, // SYM_ON_M
+	{0xA0, 0, OSD_ELEM_FLIGHT_TIME, true, VAL_TIME, false, 0, 0}, // SYM_CLOCK
 };
 
+// Betaflight formats every one of these through osdPrintFloat() or a tfp_sprintf
+// alongside it in src/main/osd/osd_elements.c, so the shape of each field - which
+// side the symbol sits on, whether a unit follows - is taken from there rather
+// than guessed.
 static const osd_anchor_t kAnchorsBtfl[] = {
-	{0x06, 0, OSD_ELEM_VOLTAGE, false, VAL_NUMBER},      // SYM_VOLT
-	{0x9A, 0, OSD_ELEM_CURRENT, false, VAL_NUMBER},      // SYM_AMP
-	{0x07, 0, OSD_ELEM_MAH, false, VAL_NUMBER},          // SYM_MAH
-	{0x7F, 0, OSD_ELEM_ALTITUDE, false, VAL_NUMBER},     // SYM_ALTITUDE
-	{0x89, 0, OSD_ELEM_LATITUDE, true, VAL_NUMBER},      // SYM_LAT
-	{0x98, 0, OSD_ELEM_LONGITUDE, true, VAL_NUMBER},     // SYM_LON
-	{0x01, 0, OSD_ELEM_RSSI, true, VAL_NUMBER},          // SYM_RSSI
-	{0x1F, 0x1E, OSD_ELEM_SATS, true, VAL_NUMBER},       // SYM_SAT_R, icon SYM_SAT_L
-	{0x04, 0, OSD_ELEM_THROTTLE, true, VAL_NUMBER},      // SYM_THR
-	{0x9C, 0, OSD_ELEM_FLIGHT_TIME, true, VAL_TIME},     // SYM_FLY_M
-	{0x9B, 0, OSD_ELEM_FLIGHT_TIME, true, VAL_TIME},     // SYM_ON_M
+	{0x06, 0, OSD_ELEM_VOLTAGE, false, VAL_NUMBER, false, 0, 0},    // SYM_VOLT
+	{0x9A, 0, OSD_ELEM_CURRENT, false, VAL_NUMBER, false, 0, 0},    // SYM_AMP
+	{0x07, 0, OSD_ELEM_MAH, false, VAL_NUMBER, false, 0, 0},        // SYM_MAH
+	// SYM_ALTITUDE *leads* in Betaflight - osdFormatAltitudeString passes it as
+	// osdPrintFloat's leading symbol, with the unit trailing. Treating it as a
+	// trailing symbol meant looking left at blank cells, so Betaflight altitude
+	// was never recognised at all.
+	{0x7F, 0, OSD_ELEM_ALTITUDE, true, VAL_NUMBER, true, 0, 0},     // SYM_ALTITUDE
+	{0x89, 0, OSD_ELEM_LATITUDE, true, VAL_NUMBER, false, 0, 0},    // SYM_LAT
+	{0x98, 0, OSD_ELEM_LONGITUDE, true, VAL_NUMBER, false, 0, 0},   // SYM_LON
+	{0x01, 0, OSD_ELEM_RSSI, true, VAL_NUMBER, false, 0, 0},        // SYM_RSSI
+	{0x1F, 0x1E, OSD_ELEM_SATS, true, VAL_NUMBER, false, 0, 0},     // SYM_SAT_R, icon SYM_SAT_L
+	{0x04, 0, OSD_ELEM_THROTTLE, true, VAL_NUMBER, false, 0, 0},    // SYM_THR
+	{0x9C, 0, OSD_ELEM_FLIGHT_TIME, true, VAL_TIME, false, 0, 0},   // SYM_FLY_M
+	{0x9B, 0, OSD_ELEM_FLIGHT_TIME, true, VAL_TIME, false, 0, 0},   // SYM_ON_M
+	{0x70, 0, OSD_ELEM_SPEED, true, VAL_NUMBER, true, 0, 0},        // SYM_SPEED
+	{0x70, 0, OSD_ELEM_SPEED, true, VAL_NUMBER, true, 0, 'a'},      // the same, airspeed
+	{0x75, 0, OSD_ELEM_VARIO, true, VAL_NUMBER, true, 0, 0},        // SYM_ARROW_SMALL_UP
+	{0x76, 0, OSD_ELEM_VARIO, true, VAL_NUMBER, true, 0, 0},        // SYM_ARROW_SMALL_DOWN
+	{0x11, 0, OSD_ELEM_HOME_DISTANCE, true, VAL_NUMBER, true, 0, 0},  // SYM_HOMEFLAG
+	{0x71, 0, OSD_ELEM_TOTAL_DISTANCE, true, VAL_NUMBER, true, 0, 0}, // SYM_TOTAL_DISTANCE
+	{0x7A, 0, OSD_ELEM_TEMPERATURE, true, VAL_NUMBER, true, 'C', 0},  // SYM_TEMPERATURE, core
+	{0x7A, 0, OSD_ELEM_TEMPERATURE, true, VAL_NUMBER, true, 'E', 0},  // the same, ESC
+	{0x7B, 0, OSD_ELEM_LINK_QUALITY, true, VAL_NUMBER, false, 0, 0},  // SYM_LINK_QUALITY
 };
 
 // The compass bar is built from a small alphabet of graphic glyphs - N, S, E, W,
@@ -61,8 +110,24 @@ static const osd_anchor_t kAnchorsBtfl[] = {
 #define BTFL_HEADING_FIRST 0x18
 #define BTFL_HEADING_LAST 0x1D
 
+// True when an earlier pass already took this cell. The passes run over the
+// same grid in sequence, and without this a glyph that happens to fall inside a
+// numeric run would be recognised a second time as an element of its own.
+static bool cell_claimed(const osd_element_t *out, int found, int row, int col) {
+	for (int i = 0; i < found; i++)
+		if (out[i].row == row && col >= out[i].col && col < out[i].col + out[i].width)
+			return true;
+	return false;
+}
+
 // Shorter than the real bar so a partially redrawn one is still found.
 #define HEADING_BAR_MIN_RUN 5
+
+// The sixteen-point arrow rose, SYM_ARROW_SOUTH .. SYM_ARROW_16, plus the
+// separate glyph drawn when the aircraft is directly over the launch point.
+#define BTFL_ARROW_FIRST 0x60
+#define BTFL_ARROW_LAST 0x6F
+#define BTFL_OVER_HOME 0x05
 
 // Battery icon ranges, full -> empty. The icon beside a voltage is what marks it
 // as battery voltage, and its index is the FC's own coarse charge gauge.
@@ -242,7 +307,39 @@ const char *osd_element_type_name(osd_element_type_t type) {
 	case OSD_ELEM_FLIGHT_MODE: return "flight_mode";
 	case OSD_ELEM_WARNING: return "warning";
 	case OSD_ELEM_HEADING_BAR: return "heading_bar";
+	case OSD_ELEM_SPEED: return "speed";
+	case OSD_ELEM_VARIO: return "vario";
+	case OSD_ELEM_HOME_DISTANCE: return "home_distance";
+	case OSD_ELEM_TOTAL_DISTANCE: return "total_distance";
+	case OSD_ELEM_TEMPERATURE: return "temperature";
+	case OSD_ELEM_LINK_QUALITY: return "link_quality";
+	case OSD_ELEM_RSSI_DBM: return "rssi_dbm";
+	case OSD_ELEM_SNR: return "snr";
+	case OSD_ELEM_HOME_ARROW: return "home_arrow";
+	case OSD_ELEM_HEADING: return "heading";
+	case OSD_ELEM_GFORCE: return "gforce";
+	case OSD_ELEM_POWER: return "power";
+	case OSD_ELEM_WATT_HOURS: return "watt_hours";
+	case OSD_ELEM_RANGEFINDER: return "rangefinder";
+	case OSD_ELEM_EFFICIENCY: return "efficiency";
+	case OSD_ELEM_TX_POWER: return "tx_power";
 	default: return "none";
+	}
+}
+
+const char *osd_unit_name(osd_unit_t unit) {
+	switch (unit) {
+	case OSD_UNIT_METRES: return "m";
+	case OSD_UNIT_FEET: return "ft";
+	case OSD_UNIT_KM: return "km";
+	case OSD_UNIT_MILES: return "mi";
+	case OSD_UNIT_KPH: return "km/h";
+	case OSD_UNIT_MPH: return "mph";
+	case OSD_UNIT_MPS: return "m/s";
+	case OSD_UNIT_FTPS: return "ft/s";
+	case OSD_UNIT_CELSIUS: return "degC";
+	case OSD_UNIT_FAHRENHEIT: return "degF";
+	default: return "";
 	}
 }
 
@@ -293,15 +390,54 @@ int osd_elements_scan(osd_glyph_getter get,
 			if (g == 0 || g == 0x20)
 				continue;
 
+			// More than one row can share a glyph, differing only in the letter
+			// that follows it. Prefer a row whose letter is actually on screen,
+			// so speed does not match the airspeed field and lose the 'a'.
+			// More than one row can share a glyph, differing only in the letter
+			// beside it. Prefer a row whose letter is actually on screen, so
+			// speed does not match the airspeed field and lose the 'a', and core
+			// temperature is not read as ESC temperature.
 			const osd_anchor_t *anchor = NULL;
+			bool lettered = false;
 			for (int a = 0; a < anchor_count; a++) {
-				if (anchors[a].glyph == g) {
-					anchor = &anchors[a];
-					break;
+				if (anchors[a].glyph != g)
+					continue;
+				if (anchors[a].prefix || anchors[a].infix) {
+					const bool pre_ok = !anchors[a].prefix ||
+										(col > 0 && get(col - 1, row, ctx) ==
+														(uint16_t)anchors[a].prefix);
+					const bool in_ok = !anchors[a].infix ||
+									   (col + 1 < cols && get(col + 1, row, ctx) ==
+															  (uint16_t)anchors[a].infix);
+					if (pre_ok && in_ok) {
+						anchor = &anchors[a];
+						lettered = true;
+						break;
+					}
+					continue;
 				}
+				if (!anchor)
+					anchor = &anchors[a]; // the letterless fallback
 			}
 			if (!anchor)
 				continue;
+			// A letterless row must not claim a field that carries a letter: the
+			// digits would start one cell late and the reading would be wrong.
+			if (!lettered) {
+				bool letter_variant = false;
+				for (int a = 0; a < anchor_count; a++) {
+					if (anchors[a].glyph != g)
+						continue;
+					if (anchors[a].infix && col + 1 < cols &&
+						get(col + 1, row, ctx) == (uint16_t)anchors[a].infix)
+						letter_variant = true;
+					if (anchors[a].prefix && col > 0 &&
+						get(col - 1, row, ctx) == (uint16_t)anchors[a].prefix)
+						letter_variant = true;
+				}
+				if (letter_variant)
+					continue;
+			}
 
 			// Walk away from the anchor across the contiguous numeric run.
 			char text[24];
@@ -315,6 +451,16 @@ int osd_elements_scan(osd_glyph_getter get,
 				// first blank loses exactly those cases - which are the low,
 				// blinking, and therefore most important ones.
 				int c = col + 1;
+				// Some fields carry a letter between the symbol and the digits
+				// that says which of several readings this is - 'C' or 'E' for
+				// core against ESC temperature, 'a' for airspeed. The table
+				// holds one row per letter, so a row whose letter is not on
+				// screen is simply the wrong row.
+				if (anchor->infix) {
+					if (c >= cols || get(c, row, ctx) != (uint16_t)anchor->infix)
+						continue;
+					c++;
+				}
 				int skipped = 0;
 				while (c < cols && skipped < VALUE_MAX_LEADING_BLANKS) {
 					uint16_t g2 = get(c, row, ctx);
@@ -380,6 +526,10 @@ int osd_elements_scan(osd_glyph_getter get,
 			memset(e, 0, sizeof(*e));
 			e->type = anchor->type;
 			e->row = (uint8_t)row;
+			// Above a watt the transmit power is printed in watts rather than
+			// milliwatts. Noted here and applied after the number is parsed -
+			// scaling e->value at this point would multiply a zero.
+			bool tx_power_in_watts = false;
 
 			// Absorb a two-cell icon (satellites) so its left half is not left
 			// stranded beside the widget that replaces it.
@@ -405,6 +555,52 @@ int osd_elements_scan(osd_glyph_getter get,
 				}
 			}
 
+			// A unit glyph closes the field. Absorbing it into the run both tells
+			// the widget what to label the number and stops the glyph being left
+			// on screen once the text underneath is cleared.
+			if (anchor->trailing_unit && last_col + 1 < cols) {
+				const osd_unit_t u = unit_for_glyph(get(last_col + 1, row, ctx));
+				if (u != OSD_UNIT_NONE) {
+					e->unit = u;
+					last_col++;
+				}
+			}
+			// Two Betaflight fields borrow another element's symbol and mean
+			// something else entirely. Both were being reported as the element
+			// whose symbol they carry, with a plausible-looking number, which is
+			// worse than not reporting them: the reading is wrong rather than
+			// absent. The literal that follows is what gives them away.
+			if (is_btfl && e->type == OSD_ELEM_MAH && last_col + 2 < cols &&
+				get(last_col + 1, row, ctx) == '/') {
+				// "1234<mAh>/<km>" - efficiency, not capacity used.
+				const osd_unit_t u = unit_for_glyph(get(last_col + 2, row, ctx));
+				if (u == OSD_UNIT_KM || u == OSD_UNIT_MILES) {
+					e->type = OSD_ELEM_EFFICIENCY;
+					e->unit = u;
+					last_col += 2;
+				}
+			}
+			if (is_btfl && e->type == OSD_ELEM_RSSI && last_col + 1 < cols) {
+				// "<rssi>250MW" or "<rssi>1.5W" - uplink transmit power.
+				const uint16_t n1 = get(last_col + 1, row, ctx);
+				const uint16_t n2 = last_col + 2 < cols ? get(last_col + 2, row, ctx) : 0;
+				if (n1 == 'M' && n2 == 'W') {
+					e->type = OSD_ELEM_TX_POWER;
+					last_col += 2;
+				} else if (n1 == 'W') {
+					e->type = OSD_ELEM_TX_POWER;
+					tx_power_in_watts = true;
+					last_col += 1;
+				}
+			}
+
+			// The letter before the symbol belongs to the field too - leaving it
+			// behind puts a stray "C" beside the widget that replaced it.
+			if (anchor->prefix && first_col > 0)
+				first_col--;
+			if (anchor->infix == 'a')
+				e->is_airspeed = true;
+
 			e->col = (uint8_t)first_col;
 			e->width = (uint8_t)(last_col - first_col + 1);
 			// The symbol is where the flight controller pinned the field; the
@@ -424,11 +620,34 @@ int osd_elements_scan(osd_glyph_getter get,
 				e->value = e->value_valid ? v : 0.0f;
 			}
 
+			if (tx_power_in_watts && e->value_valid)
+				e->value *= 1000.0f;
+
 			// Both cell and pack voltage are marked with SYM_VOLT, so magnitude
 			// is the only available discriminator. A 1S pack is genuinely
 			// ambiguous, but then per-cell and pack voltage are the same number.
 			if (e->type == OSD_ELEM_VOLTAGE && e->value_valid)
 				e->is_per_cell = (e->value > 0.5f && e->value <= 4.6f);
+
+			// Betaflight draws the climb rate as an unsigned number under an
+			// arrow, so the sign lives in the glyph and nowhere else.
+			if (e->type == OSD_ELEM_VARIO && e->value_valid && g == 0x76)
+				e->value = -e->value;
+
+			// RSSI percent, RSSI in dBm and link SNR all carry SYM_RSSI, so the
+			// value is the only thing that separates them. Percent is 0..100 and
+			// never negative; dBm is negative and, for any link worth flying,
+			// well below -20; SNR sits either side of zero but stays small.
+			// The overlap - a small positive SNR against a low RSSI percent - is
+			// genuinely undecidable, and percent is the commoner element, so it
+			// wins. Guessing wrong the other way would draw -94dBm as a
+			// nearly-full signal bar, which is the dangerous direction.
+			if (e->type == OSD_ELEM_RSSI && e->value_valid) {
+				if (e->value <= -20.0f)
+					e->type = OSD_ELEM_RSSI_DBM;
+				else if (e->value < 0.0f)
+					e->type = OSD_ELEM_SNR;
+			}
 
 			found++;
 			col = last_col; // do not rescan the digits we just consumed
@@ -521,6 +740,173 @@ int osd_elements_scan(osd_glyph_getter get,
 				// which way the glyphs happen to be pointing.
 				e->value_valid = false;
 				snprintf(e->text, sizeof(e->text), "%s", "HEADING");
+			}
+		}
+	}
+
+	// Fields with no symbol glyph, found by the literal text around the number.
+	//
+	// Betaflight draws about two dozen elements as plain characters. Where the
+	// firmware wraps the number in something fixed - a trailing 'G', "WH", an
+	// "RF:" prefix - that literal is as good an anchor as a symbol glyph, and
+	// these are picked up here.
+	//
+	// The rest cannot be reached this way and are deliberately left alone. ESC
+	// RPM is "%d", the RC channel readout "%5d", the ETA "%02u:%02u", the
+	// PID/rate profile "%d-%d": bare numbers with nothing to distinguish them
+	// from each other or from a number belonging to anything else on screen.
+	// Matching those on shape alone would turn arbitrary digits into widgets,
+	// and a widget confidently showing the wrong quantity is worse than one that
+	// is missing. Reaching them needs the layout itself, which Betaflight will
+	// hand over through MSP_OSD_CONFIG - a different mechanism, not a better
+	// pattern match.
+	if (is_btfl) {
+		for (int row = 0; row < rows && found < max_out; row++) {
+			for (int col = 0; col < cols && found < max_out; col++) {
+				// The run has to start cleanly, or "13" out of "1234" matches.
+				if (col > 0) {
+					const uint16_t prev = get(col - 1, row, ctx);
+					if (prev != 0x20 && prev != 0)
+						continue;
+				}
+
+				// "RF:" then a distance - the only prefixed one worth having;
+				// the others ("RATE_2", "PID_1") are legible as they are.
+				int start = col;
+				int c = col;
+				osd_element_type_t type = OSD_ELEM_NONE;
+				if (col + 3 < cols && get(col, row, ctx) == 'R' &&
+					get(col + 1, row, ctx) == 'F' && get(col + 2, row, ctx) == ':') {
+					type = OSD_ELEM_RANGEFINDER;
+					c = col + 3;
+					while (c < cols && get(c, row, ctx) == 0x20)
+						c++;
+				}
+
+				char num[16];
+				int nl = 0;
+				const int dig_start = c;
+				while (c < cols && nl < (int)sizeof(num) - 1) {
+					const uint16_t d = get(c, row, ctx);
+					if ((d < '0' || d > '9') && d != '.' && !(nl == 0 && d == '-'))
+						break;
+					num[nl++] = (char)d;
+					c++;
+				}
+				num[nl] = '\0';
+				if (nl == 0 || (nl == 1 && num[0] == '-')) {
+					col = dig_start > col ? dig_start : col;
+					continue;
+				}
+
+				// The suffix decides what it is. Longest first: "MWH" would
+				// otherwise be read as "WH" with a stray M, and "WH" as "W".
+				int suffix = 0;
+				float scale = 1.0f;
+				if (type == OSD_ELEM_NONE) {
+					const uint16_t s1 = c < cols ? get(c, row, ctx) : 0;
+					const uint16_t s2 = c + 1 < cols ? get(c + 1, row, ctx) : 0;
+					const uint16_t s3 = c + 2 < cols ? get(c + 2, row, ctx) : 0;
+					if (s1 == 'M' && s2 == 'W' && s3 == 'H') {
+						type = OSD_ELEM_WATT_HOURS;
+						suffix = 3;
+						scale = 0.001f; // printed in milliwatt-hours
+					} else if (s1 == 'W' && s2 == 'H') {
+						type = OSD_ELEM_WATT_HOURS;
+						suffix = 2;
+					} else if (s1 == 'G' && s2 != 'H') {
+						type = OSD_ELEM_GFORCE;
+						suffix = 1;
+					} else if (s1 == 'W') {
+						type = OSD_ELEM_POWER;
+						suffix = 1;
+					}
+					if (type == OSD_ELEM_NONE) {
+						col = c > col ? c : col;
+						continue;
+					}
+					// A letter after the suffix means this is a word, not a
+					// reading: "12WHATEVER" is not 12 watt-hours.
+					const uint16_t after = c + suffix < cols ? get(c + suffix, row, ctx) : 0;
+					if ((after >= 'A' && after <= 'Z') || (after >= '0' && after <= '9')) {
+						col = c > col ? c : col;
+						continue;
+					}
+				}
+
+				const int end = c + suffix - 1;
+				if (cell_claimed(out, found, row, start) || cell_claimed(out, found, row, end)) {
+					col = end;
+					continue;
+				}
+
+				osd_element_t *e = &out[found++];
+				memset(e, 0, sizeof(*e));
+				e->type = type;
+				e->row = (uint8_t)row;
+				e->col = (uint8_t)start;
+				e->width = (uint8_t)(end - start + 1);
+				e->anchor_col = (uint8_t)start;
+				e->value = strtof(num, NULL) * scale;
+				e->value_valid = true;
+				snprintf(e->text, sizeof(e->text), "%s", num);
+				col = end;
+			}
+		}
+	}
+
+	// The home arrow, and the numerical heading that shares its glyphs.
+	//
+	// Betaflight draws both from the same sixteen-glyph compass rose: the home
+	// direction element is a lone arrow, and the numerical heading is an arrow
+	// followed by three digits. So the digits are the discriminator, and neither
+	// needs a table entry of its own.
+	//
+	// Only Betaflight for now - INAV's arrow block sits elsewhere in its font and
+	// is not confirmed here, and a wrong range would turn ordinary glyphs into
+	// widgets.
+	if (is_btfl) {
+		for (int row = 0; row < rows && found < max_out; row++) {
+			for (int col = 0; col < cols && found < max_out; col++) {
+				const uint16_t g = get(col, row, ctx);
+				const bool is_arrow = (g >= BTFL_ARROW_FIRST && g <= BTFL_ARROW_LAST);
+				if (!is_arrow && g != BTFL_OVER_HOME)
+					continue;
+				if (cell_claimed(out, found, row, col))
+					continue;
+
+				// Three digits after it make this the heading readout.
+				char digits[8];
+				int dl = 0;
+				for (int c = col + 1; c < cols && dl < 3; c++) {
+					const uint16_t d = get(c, row, ctx);
+					if (d < '0' || d > '9')
+						break;
+					digits[dl++] = (char)d;
+				}
+				digits[dl] = '\0';
+
+				osd_element_t *e = &out[found++];
+				memset(e, 0, sizeof(*e));
+				e->row = (uint8_t)row;
+				e->col = (uint8_t)col;
+				e->anchor_col = (uint8_t)col;
+				if (dl == 3) {
+					e->type = OSD_ELEM_HEADING;
+					e->width = (uint8_t)(1 + dl);
+					e->value = (float)atoi(digits);
+					e->value_valid = true;
+					snprintf(e->text, sizeof(e->text), "%s", digits);
+					col += dl;
+				} else {
+					// The glyph is the whole element - it *is* the bearing. We
+					// redraw it from the fix rather than decoding which of the
+					// sixteen it happens to be.
+					e->type = OSD_ELEM_HOME_ARROW;
+					e->width = 1;
+					e->value_valid = false;
+					snprintf(e->text, sizeof(e->text), "%s", "HOME");
+				}
 			}
 		}
 	}

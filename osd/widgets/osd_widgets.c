@@ -11,6 +11,35 @@
 	#define M_PI 3.14159265358979323846
 #endif
 
+bool osd_widgets_placement(const osd_widget_state_t *st, osd_element_type_t type, float *x,
+	float *y, float *w, float *h) {
+	if (!st)
+		return false;
+	for (int i = 0; i < OSD_WIDGET_SLOTS; i++) {
+		if (!st->slots[i].used || !st->slots[i].layout_valid || st->slots[i].el.type != type)
+			continue;
+		if (x)
+			*x = st->slots[i].x;
+		if (y)
+			*y = st->slots[i].y;
+		if (w)
+			*w = st->slots[i].w;
+		if (h)
+			*h = st->slots[i].h;
+		return true;
+	}
+	return false;
+}
+
+const osd_element_t *osd_widgets_cached(const osd_widget_state_t *st, osd_element_type_t type) {
+	if (!st)
+		return NULL;
+	for (int i = 0; i < OSD_WIDGET_SLOTS; i++)
+		if (st->slots[i].used && st->slots[i].el.type == type)
+			return &st->slots[i].el;
+	return NULL;
+}
+
 void osd_widgets_state_init(osd_widget_state_t *st) {
 	if (!st)
 		return;
@@ -57,6 +86,21 @@ static const char *label_for(const osd_element_t *e) {
 	case OSD_ELEM_RSSI: return "SIGNAL";
 	case OSD_ELEM_LATITUDE: return "LATITUDE";
 	case OSD_ELEM_LONGITUDE: return "LONGITUDE";
+	case OSD_ELEM_SPEED: return e->is_airspeed ? "AIRSPEED" : "GROUND SPEED";
+	case OSD_ELEM_VARIO: return "CLIMB RATE";
+	case OSD_ELEM_HOME_DISTANCE: return "HOME";
+	case OSD_ELEM_TOTAL_DISTANCE: return "DISTANCE FLOWN";
+	case OSD_ELEM_TEMPERATURE: return "TEMPERATURE";
+	case OSD_ELEM_LINK_QUALITY: return "LINK QUALITY";
+	case OSD_ELEM_RSSI_DBM: return "SIGNAL";
+	case OSD_ELEM_SNR: return "SNR";
+	case OSD_ELEM_HEADING: return "HEADING";
+	case OSD_ELEM_GFORCE: return "G-FORCE";
+	case OSD_ELEM_POWER: return "POWER";
+	case OSD_ELEM_WATT_HOURS: return "ENERGY USED";
+	case OSD_ELEM_RANGEFINDER: return "RANGEFINDER";
+	case OSD_ELEM_EFFICIENCY: return "EFFICIENCY";
+	case OSD_ELEM_TX_POWER: return "TX POWER";
 	default: return "";
 	}
 }
@@ -65,6 +109,8 @@ static const char *label_for(const osd_element_t *e) {
 // widget should render as a plain value panel.
 static float fill_fraction(const osd_element_t *e, const osd_theme_t *th, float peak, int cells) {
 	switch (e->type) {
+	// Both are already percentages, so a bar is the honest way to draw them.
+	case OSD_ELEM_LINK_QUALITY:
 	case OSD_ELEM_THROTTLE: {
 		float f = e->value / 100.0f;
 		return f < 0.0f ? 0.0f : (f > 1.0f ? 1.0f : f);
@@ -131,10 +177,25 @@ static osd_color_t state_color(const osd_element_t *e, const osd_theme_t *th, in
 		if (e->value < 10.0f)
 			return th->warn;
 	}
-	if (e->type == OSD_ELEM_RSSI) {
+	if (e->type == OSD_ELEM_RSSI || e->type == OSD_ELEM_LINK_QUALITY) {
 		if (e->value < 30.0f)
 			return th->crit;
 		if (e->value < 55.0f)
+			return th->warn;
+	}
+	// dBm is a log scale, so the thresholds are not the percentage ones with a
+	// sign flipped. Around -95 an ELRS link starts dropping packets; -105 is
+	// where it goes.
+	if (e->type == OSD_ELEM_RSSI_DBM) {
+		if (e->value < -100.0f)
+			return th->crit;
+		if (e->value < -90.0f)
+			return th->warn;
+	}
+	if (e->type == OSD_ELEM_SNR) {
+		if (e->value < 0.0f)
+			return th->crit;
+		if (e->value < 6.0f)
 			return th->warn;
 	}
 	return th->accent;
@@ -161,7 +222,48 @@ static void format_value(const osd_element_t *e, float peak, int cells, char *ma
 		snprintf(main, mn, "%.0fA", e->value);
 		snprintf(sub, sn, "/%.0fA", peak);
 		break;
-	case OSD_ELEM_ALTITUDE: snprintf(main, mn, "%.0fM", e->value); break;
+	// The unit comes off the screen, not from an assumption here: Betaflight
+	// converts before drawing, so a feet reading relabelled as metres would be
+	// wrong by a factor of three.
+	case OSD_ELEM_ALTITUDE:
+	case OSD_ELEM_HOME_DISTANCE:
+	case OSD_ELEM_TOTAL_DISTANCE: {
+		const char *u = osd_unit_name(e->unit);
+		// Kilometres and miles arrive with decimals; metres and feet do not.
+		const bool fine = (e->unit == OSD_UNIT_KM || e->unit == OSD_UNIT_MILES);
+		snprintf(main, mn, fine ? "%.2f%s" : "%.0f%s", e->value,
+			u[0] ? u : (e->type == OSD_ELEM_ALTITUDE ? "M" : ""));
+		break;
+	}
+	case OSD_ELEM_SPEED: snprintf(main, mn, "%.0f%s", e->value, osd_unit_name(e->unit)); break;
+	// Signed, and the sign is the whole point - a climb and a dive of the same
+	// rate must not print the same.
+	case OSD_ELEM_VARIO:
+		snprintf(main, mn, "%+.1f%s", e->value, osd_unit_name(e->unit));
+		break;
+	case OSD_ELEM_TEMPERATURE:
+		snprintf(main, mn, "%.0f%s", e->value,
+			e->unit == OSD_UNIT_FAHRENHEIT ? "F" : "C");
+		break;
+	case OSD_ELEM_LINK_QUALITY: snprintf(main, mn, "%.0f%%", e->value); break;
+	case OSD_ELEM_RSSI_DBM: snprintf(main, mn, "%.0fdBm", e->value); break;
+	case OSD_ELEM_SNR: snprintf(main, mn, "%.0fdB", e->value); break;
+	case OSD_ELEM_HEADING: snprintf(main, mn, "%03.0f", e->value); break;
+	case OSD_ELEM_GFORCE: snprintf(main, mn, "%.1fG", e->value); break;
+	case OSD_ELEM_POWER: snprintf(main, mn, "%.0fW", e->value); break;
+	case OSD_ELEM_WATT_HOURS: snprintf(main, mn, "%.2fWh", e->value); break;
+	case OSD_ELEM_RANGEFINDER: snprintf(main, mn, "%.0fcm", e->value); break;
+	case OSD_ELEM_EFFICIENCY:
+		snprintf(main, mn, "%.0fmAh/%s", e->value, osd_unit_name(e->unit));
+		break;
+	// Held in milliwatts throughout, so the two ways the firmware prints it
+	// cannot end up as two different scales on our side.
+	case OSD_ELEM_TX_POWER:
+		if (e->value >= 1000.0f)
+			snprintf(main, mn, "%.1fW", e->value / 1000.0f);
+		else
+			snprintf(main, mn, "%.0fmW", e->value);
+		break;
 	case OSD_ELEM_MAH: snprintf(main, mn, "%.0fmAh", e->value); break;
 	// Straight from the flight controller: a float would round away the last
 	// digit of a coordinate, which is metres on the ground.
@@ -431,7 +533,7 @@ static bool element_is_textual(osd_element_type_t type) {
 // where the display goes. Without this it would be dropped for having no value,
 // exactly like a numeric element that failed to parse.
 static bool element_is_position_only(osd_element_type_t type) {
-	return type == OSD_ELEM_HEADING_BAR;
+	return type == OSD_ELEM_HEADING_BAR || type == OSD_ELEM_HOME_ARROW;
 }
 
 // Pixel rectangle of a cell run, via the host's mapping when it provides one.
@@ -447,6 +549,58 @@ static void cell_rect(const osd_grid_t *g, int col, int row, int span, int *x, i
 	*h = g->cell_h;
 }
 
+// Finds the slot holding this element, or claims a free one. Keyed on where the
+// element sits as well as what it is, so two of the same kind on screen get a
+// slot each instead of overwriting one another every frame.
+static int slot_for(osd_widget_state_t *st, const osd_element_t *e, uint64_t now_ms,
+	float hold_ms) {
+	int free_slot = -1;
+	int oldest = -1;
+	uint64_t oldest_seen = (uint64_t)-1;
+	for (int i = 0; i < OSD_WIDGET_SLOTS; i++) {
+		if (!st->slots[i].used) {
+			if (free_slot < 0)
+				free_slot = i;
+			continue;
+		}
+		if (st->slots[i].el.type == e->type && st->slots[i].el.row == e->row &&
+			st->slots[i].el.anchor_col == e->anchor_col)
+			return i;
+		// Expired slots are reusable: an element the pilot moved leaves its old
+		// slot behind, and without this a screen edited a few times fills up.
+		if ((float)(now_ms - st->slots[i].last_seen_ms) > hold_ms) {
+			st->slots[i].used = false;
+			if (free_slot < 0)
+				free_slot = i;
+			continue;
+		}
+		if (st->slots[i].last_seen_ms < oldest_seen) {
+			oldest_seen = st->slots[i].last_seen_ms;
+			oldest = i;
+		}
+	}
+	if (free_slot >= 0)
+		return free_slot;
+	// Full. Evicting the stalest is the least bad option, and it is the one
+	// nearest to falling out of the hold window anyway.
+	return oldest;
+}
+
+// The first slot of a given type still inside its hold window. Used where only
+// one instance can mean anything - the map's corner coordinates, the fix the
+// home bearing is measured from.
+static const osd_element_t *live_element(
+	const osd_widget_state_t *st, osd_element_type_t type, uint64_t now_ms, float hold_ms) {
+	for (int i = 0; i < OSD_WIDGET_SLOTS; i++) {
+		if (!st->slots[i].used || st->slots[i].el.type != type)
+			continue;
+		if ((float)(now_ms - st->slots[i].last_seen_ms) > hold_ms)
+			continue;
+		return &st->slots[i].el;
+	}
+	return NULL;
+}
+
 // Initial great-circle bearing from one fix to another, in compass degrees.
 // Rhumb would be simpler, but home is usually within a few km and over that
 // distance the two agree to well under a degree - and this one stays right if
@@ -460,6 +614,49 @@ static float bearing_deg(double lat1, double lon1, double lat2, double lon2) {
 	if (b < 0.0)
 		b += 360.0;
 	return (float)b;
+}
+
+// The home arrow, in the cell the flight controller drew its own in.
+//
+// The firmware picks one of sixteen arrow glyphs, which is 22.5 degrees of
+// resolution; we have the bearing to a fraction of a degree, so it is redrawn
+// rather than decoded. Relative to the nose, like the firmware's: straight up
+// means home is dead ahead.
+static void draw_home_arrow(osd_surface_t *s, const osd_theme_t *th, float cx, float cy, float r,
+	float bearing_rel_deg, float opacity) {
+	const float a = bearing_rel_deg * (float)M_PI / 180.0f;
+	const float ux = sinf(a), uy = -cosf(a);
+	// Perpendicular, for the barbs and the tail.
+	const float px = -uy, py = ux;
+	const osd_color_t c = osd_theme_apply_opacity(th->accent, opacity);
+	const osd_color_t o = osd_theme_apply_opacity(th->text_outline_color, opacity);
+
+	const osd_pointf_t head[3] = {{cx + ux * r, cy + uy * r},
+		{cx - ux * r * 0.25f + px * r * 0.62f, cy - uy * r * 0.25f + py * r * 0.62f},
+		{cx - ux * r * 0.25f - px * r * 0.62f, cy - uy * r * 0.25f - py * r * 0.62f}};
+	if (th->text_outline) {
+		// Same trick the compass uses: grow about the centroid so the outline is
+		// even on every side.
+		float mx = 0.0f, my = 0.0f;
+		for (int i = 0; i < 3; i++) {
+			mx += head[i].x;
+			my += head[i].y;
+		}
+		mx /= 3.0f;
+		my /= 3.0f;
+		osd_pointf_t big[3];
+		for (int i = 0; i < 3; i++) {
+			const float dx = head[i].x - mx, dy = head[i].y - my;
+			const float len = sqrtf(dx * dx + dy * dy);
+			const float k = len > 0.001f ? (len + 2.0f) / len : 1.0f;
+			big[i].x = mx + dx * k;
+			big[i].y = my + dy * k;
+		}
+		osd_fill_poly(s, big, 3, o);
+		osd_draw_line(s, cx - ux * r * 0.2f, cy - uy * r * 0.2f, cx - ux * r, cy - uy * r, 7.0f, o);
+	}
+	osd_draw_line(s, cx - ux * r * 0.2f, cy - uy * r * 0.2f, cx - ux * r, cy - uy * r, 3.0f, c);
+	osd_fill_poly(s, head, 3, c);
 }
 
 // Bounding box of the heading display, for collision avoidance. Each style
@@ -893,25 +1090,35 @@ int osd_widgets_draw_all(osd_surface_t *s, const osd_theme_t *th, osd_font_t *fo
 		// the widget blinks out - and for latitude and longitude, the whole map
 		// goes with it for a frame. The hold below already covers an element
 		// that vanishes; this covers one that arrives broken.
+		const int slot = slot_for(st, e, now_ms, th->element_hold_ms);
+		if (slot < 0)
+			continue;
 		if (!e->value_valid && !element_is_textual(e->type) &&
-			!element_is_position_only(e->type) && st->last_seen_ms[e->type] != 0 &&
-			(float)(now_ms - st->last_seen_ms[e->type]) <= th->element_hold_ms)
+			!element_is_position_only(e->type) && st->slots[slot].used &&
+			(float)(now_ms - st->slots[slot].last_seen_ms) <= th->element_hold_ms)
 			continue;
 
-		st->last[e->type] = *e;
-		st->last_seen_ms[e->type] = now_ms;
+		if (!st->slots[slot].used) {
+			st->slots[slot].used = true;
+			st->slots[slot].layout_valid = false;
+		}
+		st->slots[slot].el = *e;
+		st->slots[slot].last_seen_ms = now_ms;
 	}
 
 	// Build the draw list from the cache, so an element that blinked out is
 	// still drawn until its hold expires.
-	osd_element_t list[OSD_ELEM_TYPE_COUNT];
+	osd_element_t list[OSD_WIDGET_SLOTS];
+	int slot_of[OSD_WIDGET_SLOTS];
 	int n = 0;
-	for (int ty = 1; ty < OSD_ELEM_TYPE_COUNT; ty++) {
-		if (st->last_seen_ms[ty] == 0)
+	for (int sl = 0; sl < OSD_WIDGET_SLOTS; sl++) {
+		if (!st->slots[sl].used)
 			continue;
-		if ((float)(now_ms - st->last_seen_ms[ty]) > th->element_hold_ms)
+		if ((float)(now_ms - st->slots[sl].last_seen_ms) > th->element_hold_ms) {
+			st->slots[sl].used = false;
 			continue;
-		const osd_element_t *e = &st->last[ty];
+		}
+		const osd_element_t *e = &st->slots[sl].el;
 		// Messages have to count as textual here too, or every failsafe is
 		// recognised and then dropped silently for having no numeric value.
 		const bool textual = element_is_textual(e->type) || element_is_position_only(e->type);
@@ -919,6 +1126,7 @@ int osd_widgets_draw_all(osd_surface_t *s, const osd_theme_t *th, osd_font_t *fo
 			continue;
 		if (osd_theme_element_opacity(th, e->type) <= 0.01f)
 			continue;
+		slot_of[n] = sl;
 		list[n++] = *e;
 	}
 
@@ -977,13 +1185,16 @@ int osd_widgets_draw_all(osd_surface_t *s, const osd_theme_t *th, osd_font_t *fo
 	// vertical list of panels.
 	for (int i = 1; i < n; i++) {
 		osd_element_t key = list[i];
+		const int key_slot = slot_of[i];
 		int j = i - 1;
 		while (j >= 0 && (list[j].row > key.row ||
 							 (list[j].row == key.row && list[j].col > key.col))) {
 			list[j + 1] = list[j];
+			slot_of[j + 1] = slot_of[j];
 			j--;
 		}
 		list[j + 1] = key;
+		slot_of[j + 1] = key_slot;
 	}
 
 	// Blank the glyphs of every element we are replacing, before any panel is
@@ -1006,11 +1217,9 @@ int osd_widgets_draw_all(osd_surface_t *s, const osd_theme_t *th, osd_font_t *fo
 	// -> armed edge, which is what the flight controller uses too. Captured from
 	// the cache rather than inside the map block, because the compass wants a
 	// home bearing whether or not a map is on screen.
-	const osd_element_t *fix_lat = &st->last[OSD_ELEM_LATITUDE];
-	const osd_element_t *fix_lon = &st->last[OSD_ELEM_LONGITUDE];
-	const bool have_fix = fix_lat->value_valid && fix_lon->value_valid &&
-						  st->last_seen_ms[OSD_ELEM_LATITUDE] != 0 &&
-						  st->last_seen_ms[OSD_ELEM_LONGITUDE] != 0;
+	const osd_element_t *fix_lat = live_element(st, OSD_ELEM_LATITUDE, now_ms, th->element_hold_ms);
+	const osd_element_t *fix_lon = live_element(st, OSD_ELEM_LONGITUDE, now_ms, th->element_hold_ms);
+	const bool have_fix = fix_lat && fix_lon && fix_lat->value_valid && fix_lon->value_valid;
 	if (st->prev_armed && !st->home_valid && have_fix) {
 		st->home_lat = fix_lat->value;
 		st->home_lon = fix_lon->value;
@@ -1020,6 +1229,25 @@ int osd_widgets_draw_all(osd_surface_t *s, const osd_theme_t *th, osd_font_t *fo
 	if (have_map) {
 		draw_map(s, th, font, &map_lat_v, &map_lon_v, grid, st, now_ms);
 		map_drawn = true;
+	}
+
+	// The home arrow, drawn wherever the flight controller drew its own. Shares
+	// the compass's bearing and smoothing, so the two cannot disagree.
+	for (int i = 0; i < n; i++) {
+		if (list[i].type != OSD_ELEM_HOME_ARROW)
+			continue;
+		if (!st->home_valid || !have_fix)
+			break; // nothing to point at yet
+		int ax, ay, aw, ah;
+		cell_rect(grid, list[i].col, list[i].row, list[i].width, &ax, &ay, &aw, &ah);
+		const float op = osd_theme_element_opacity(th, OSD_ELEM_HOME_ARROW) * th->global_opacity;
+		const float bearing =
+			bearing_deg(fix_lat->value, fix_lon->value, st->home_lat, st->home_lon);
+		const float r = (float)(aw < ah ? aw : ah) * 0.55f *
+						osd_theme_element_scale(th, OSD_ELEM_HOME_ARROW) * th->global_scale;
+		draw_home_arrow(s, th, (float)ax + (float)aw * 0.5f, (float)ay + (float)ah * 0.5f, r,
+			bearing - st->heading_deg, op);
+		break;
 	}
 
 	if (have_heading) {
@@ -1081,14 +1309,14 @@ int osd_widgets_draw_all(osd_surface_t *s, const osd_theme_t *th, osd_font_t *fo
 	bool relayout = (sig != st->layout_signature);
 	if (relayout) {
 		st->layout_signature = sig;
-		for (int i = 0; i < OSD_ELEM_TYPE_COUNT; i++)
-			st->layout[i].valid = false;
+		for (int i = 0; i < OSD_WIDGET_SLOTS; i++)
+			st->slots[i].layout_valid = false;
 	}
 
 	// +2 for the two seeded rectangles: the map and the compass, neither of
 	// which is a panel but both of which panels must avoid.
-	float placed_x[OSD_ELEM_TYPE_COUNT + 2], placed_y[OSD_ELEM_TYPE_COUNT + 2];
-	float placed_w[OSD_ELEM_TYPE_COUNT + 2], placed_h[OSD_ELEM_TYPE_COUNT + 2];
+	float placed_x[OSD_WIDGET_SLOTS + 2], placed_y[OSD_WIDGET_SLOTS + 2];
+	float placed_w[OSD_WIDGET_SLOTS + 2], placed_h[OSD_WIDGET_SLOTS + 2];
 	int placed = 0;
 	int drawn = 0;
 
@@ -1117,6 +1345,8 @@ int osd_widgets_draw_all(osd_surface_t *s, const osd_theme_t *th, osd_font_t *fo
 			continue; // already rendered as the map
 		if (e->type == OSD_ELEM_HEADING_BAR)
 			continue; // already rendered as the compass
+		if (e->type == OSD_ELEM_HOME_ARROW)
+			continue; // already rendered as the arrow
 		float opacity = osd_theme_element_opacity(th, e->type);
 		float scale = osd_theme_element_scale(th, e->type);
 
@@ -1133,25 +1363,26 @@ int osd_widgets_draw_all(osd_surface_t *s, const osd_theme_t *th, osd_font_t *fo
 		float px = e->anchor_right ? (float)(ax + aw) - w : (float)ax;
 		float py = (float)ay;
 
-		if (!relayout && st->layout[e->type].valid) {
+		const int sl = slot_of[i];
+		if (!relayout && st->slots[sl].layout_valid) {
 			// Reuse the settled position. Width may only grow - a longer reading
 			// must still fit - and never shrinks, so the panel does not breathe
 			// as digits come and go.
-			px = st->layout[e->type].x;
-			py = st->layout[e->type].y;
-			h = st->layout[e->type].h;
-			if (w <= st->layout[e->type].w) {
-				w = st->layout[e->type].w;
+			px = st->slots[sl].x;
+			py = st->slots[sl].y;
+			h = st->slots[sl].h;
+			if (w <= st->slots[sl].w) {
+				w = st->slots[sl].w;
 			} else {
 				// A right-anchored panel grows leftwards, so the value stays put
 				// instead of the panel edge dragging it sideways.
 				if (e->anchor_right) {
-					px -= w - st->layout[e->type].w;
+					px -= w - st->slots[sl].w;
 					if (px < 0.0f)
 						px = 0.0f;
-					st->layout[e->type].x = px;
+					st->slots[sl].x = px;
 				}
-				st->layout[e->type].w = w;
+				st->slots[sl].w = w;
 			}
 
 			draw_one(s, th, font, e, st->current_peak, st->cell_count, px, py, opacity, scale);
@@ -1176,7 +1407,7 @@ int osd_widgets_draw_all(osd_surface_t *s, const osd_theme_t *th, osd_font_t *fo
 		if (py < 0.0f)
 			py = 0.0f;
 
-		for (int attempt = 0; attempt < OSD_ELEM_TYPE_COUNT; attempt++) {
+		for (int attempt = 0; attempt < OSD_WIDGET_SLOTS; attempt++) {
 			bool clash = false;
 			for (int k = 0; k < placed; k++) {
 				if (rects_overlap(px, py, w, h, placed_x[k], placed_y[k], placed_w[k], placed_h[k])) {
@@ -1205,13 +1436,11 @@ int osd_widgets_draw_all(osd_surface_t *s, const osd_theme_t *th, osd_font_t *fo
 		placed++;
 		drawn++;
 
-		st->layout[e->type].valid = true;
-		st->layout[e->type].row = e->row;
-		st->layout[e->type].col = e->anchor_col;
-		st->layout[e->type].x = px;
-		st->layout[e->type].y = py;
-		st->layout[e->type].w = w;
-		st->layout[e->type].h = h;
+		st->slots[sl].layout_valid = true;
+		st->slots[sl].x = px;
+		st->slots[sl].y = py;
+		st->slots[sl].w = w;
+		st->slots[sl].h = h;
 	}
 	return drawn;
 }

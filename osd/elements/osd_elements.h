@@ -34,8 +34,61 @@ typedef enum {
 	// pilot says "put a heading display here", exactly as latitude and
 	// longitude say where the map goes.
 	OSD_ELEM_HEADING_BAR,
+	// Speed over ground, or airspeed where a pitot is fitted. Betaflight marks
+	// airspeed by putting an 'a' between the symbol and the digits.
+	OSD_ELEM_SPEED,
+	OSD_ELEM_VARIO,          // climb rate, sign taken from the arrow glyph
+	OSD_ELEM_HOME_DISTANCE,  // straight-line distance back to the launch point
+	OSD_ELEM_TOTAL_DISTANCE, // distance flown this flight
+	OSD_ELEM_TEMPERATURE,
+	OSD_ELEM_LINK_QUALITY,
+	// Betaflight draws RSSI percent, RSSI in dBm and link SNR with the same
+	// SYM_RSSI, so these three can only be told apart by magnitude - see
+	// classify_rssi(). Getting it wrong is worse than not showing it: -94 dBm
+	// rendered as a percentage reads as a healthy link.
+	OSD_ELEM_RSSI_DBM,
+	OSD_ELEM_SNR,
+	// The arrow pointing back to the launch point. Like the compass bar it
+	// carries no reading - the glyph *is* the value, and we redraw the bearing
+	// ourselves from the fix - so only its position matters.
+	OSD_ELEM_HOME_ARROW,
+	// The numerical heading, drawn as an arrow followed by three digits. A
+	// separate element from the compass bar, and Betaflight lets both be placed
+	// at once, so both are recognised.
+	OSD_ELEM_HEADING,
+	// Fields with no symbol glyph at all, recognised by the literal text the
+	// firmware wraps them in - a trailing 'G', "WH", an "RF:" prefix. See the
+	// comment on scan_literal_fields() for what this can and cannot reach.
+	OSD_ELEM_GFORCE,
+	OSD_ELEM_POWER,       // instantaneous draw in watts
+	OSD_ELEM_WATT_HOURS,  // energy used this flight
+	OSD_ELEM_RANGEFINDER, // "RF:" then a distance
+	// mAh per km, which shares SYM_MAH with capacity used and was being read as
+	// it: an efficiency of 180 showed up as 180mAh consumed.
+	OSD_ELEM_EFFICIENCY,
+	// Uplink transmit power. Carries SYM_RSSI, so "25MW" was being read as 25%
+	// signal - a healthy-looking link that says nothing about the link.
+	OSD_ELEM_TX_POWER,
 	OSD_ELEM_TYPE_COUNT
 } osd_element_type_t;
+
+/// The unit a reading was drawn in. Flight controllers convert to the pilot's
+/// configured units before drawing and mark the result with a unit glyph, so
+/// this is read off the screen rather than assumed - a widget that relabelled
+/// feet as metres would be worse than one that showed no label at all.
+typedef enum {
+	OSD_UNIT_NONE = 0,
+	OSD_UNIT_METRES,
+	OSD_UNIT_FEET,
+	OSD_UNIT_KM,
+	OSD_UNIT_MILES,
+	OSD_UNIT_KPH,
+	OSD_UNIT_MPH,
+	OSD_UNIT_MPS,
+	OSD_UNIT_FTPS,
+	OSD_UNIT_CELSIUS,
+	OSD_UNIT_FAHRENHEIT,
+} osd_unit_t;
 
 typedef struct {
 	osd_element_type_t type;
@@ -60,6 +113,12 @@ typedef struct {
 	bool has_battery_icon;
 	// 0 = full .. 6 = empty, the flight controller's own coarse gauge.
 	int battery_level;
+	// The trailing unit glyph, where the field carries one. Absorbed into the
+	// run so it is not left stranded beside the widget that replaces it.
+	osd_unit_t unit;
+	// Airspeed rather than ground speed: Betaflight writes an 'a' between the
+	// speed symbol and the digits when a pitot tube is fitted.
+	bool is_airspeed;
 	// For warnings: how loudly to shout. A failsafe and a "LANDED" notice are
 	// both messages, but only one of them should be red.
 	enum { OSD_SEV_INFO = 0, OSD_SEV_WARN, OSD_SEV_CRIT } severity;
@@ -85,6 +144,9 @@ int osd_elements_scan(osd_glyph_getter get,
 	int max_out);
 
 const char *osd_element_type_name(osd_element_type_t type);
+
+/// Short label for a unit, e.g. "m", "km/h", "degC". "" for OSD_UNIT_NONE.
+const char *osd_unit_name(osd_unit_t unit);
 
 /// True when the flight controller has taken over the screen with its
 /// post-flight summary. That page is a dense full-screen table with its own

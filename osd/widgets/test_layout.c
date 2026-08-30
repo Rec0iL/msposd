@@ -44,6 +44,23 @@ static uint16_t getter(int col, int row, void *ctx) {
 	return grid[row][col];
 }
 
+// The layout lives in position-keyed slots, so a test asks for a placement
+// rather than indexing by type.
+#define PLACE_x(t) (place_of(&st, t).x)
+#define PLACE_y(t) (place_of(&st, t).y)
+#define PLACE_w(t) (place_of(&st, t).w)
+#define PLACE_h(t) (place_of(&st, t).h)
+
+typedef struct {
+	float x, y, w, h;
+} place4_t;
+
+static place4_t place_of(const osd_widget_state_t *st, osd_element_type_t type) {
+	place4_t p = {0, 0, 0, 0};
+	osd_widgets_placement(st, type, &p.x, &p.y, &p.w, &p.h);
+	return p;
+}
+
 static int fails = 0;
 
 static void check(const char *name, int cond) {
@@ -111,11 +128,7 @@ static bool render(osd_theme_t *th, osd_font_t *font, osd_widget_state_t *st, ui
 	osd_grid_t g = {CELL_W, CELL_H, 8, 0, NULL, NULL};
 	osd_widgets_draw_all(&s, th, font, st, els, n, &g, now_ms);
 
-	if (!st->layout[type].valid)
-		return false;
-	out->x = st->layout[type].x;
-	out->w = st->layout[type].w;
-	return true;
+	return osd_widgets_placement(st, type, &out->x, NULL, &out->w, NULL);
 }
 
 int main(void) {
@@ -229,9 +242,9 @@ int main(void) {
 		osd_surface_init(&s, buf, SURF_W, SURF_H, SURF_W * 4);
 		osd_grid_t g = {CELL_W, CELL_H, 8, 0, NULL, NULL};
 		int drawn = osd_widgets_draw_all(&s, &th, font, &st, els, n, &g, 1000);
-		check("message: actually drawn", drawn > 0 && st.layout[OSD_ELEM_WARNING].valid);
+		check("message: actually drawn", drawn > 0 && osd_widgets_placement(&st, OSD_ELEM_WARNING, NULL, NULL, NULL, NULL));
 		check("message: banner is wider than it is tall",
-			st.layout[OSD_ELEM_WARNING].w > st.layout[OSD_ELEM_WARNING].h);
+			PLACE_w(OSD_ELEM_WARNING) > PLACE_h(OSD_ELEM_WARNING));
 	}
 
 	// --- a panel pulled left to fit on screen must not land on one already
@@ -255,13 +268,13 @@ int main(void) {
 		osd_grid_t g = {CELL_W, CELL_H, 8, 0, NULL, NULL};
 		osd_widgets_draw_all(&s, &th, font, &st, els, n, &g, 1000);
 
-		bool have = st.layout[OSD_ELEM_VOLTAGE].valid && st.layout[OSD_ELEM_RSSI].valid;
+		bool have = osd_widgets_placement(&st, OSD_ELEM_VOLTAGE, NULL, NULL, NULL, NULL) && osd_widgets_placement(&st, OSD_ELEM_RSSI, NULL, NULL, NULL, NULL);
 		check("clamped panel: both panels placed", have);
 		if (have) {
-			float ax = st.layout[OSD_ELEM_VOLTAGE].x, ay = st.layout[OSD_ELEM_VOLTAGE].y;
-			float aw = st.layout[OSD_ELEM_VOLTAGE].w, ah = st.layout[OSD_ELEM_VOLTAGE].h;
-			float bx = st.layout[OSD_ELEM_RSSI].x, by = st.layout[OSD_ELEM_RSSI].y;
-			float bw = st.layout[OSD_ELEM_RSSI].w, bh = st.layout[OSD_ELEM_RSSI].h;
+			float ax = PLACE_x(OSD_ELEM_VOLTAGE), ay = PLACE_y(OSD_ELEM_VOLTAGE);
+			float aw = PLACE_w(OSD_ELEM_VOLTAGE), ah = PLACE_h(OSD_ELEM_VOLTAGE);
+			float bx = PLACE_x(OSD_ELEM_RSSI), by = PLACE_y(OSD_ELEM_RSSI);
+			float bw = PLACE_w(OSD_ELEM_RSSI), bh = PLACE_h(OSD_ELEM_RSSI);
 			check("clamped panel: stays inside the viewport",
 				bx >= 0.0f && bx + bw <= (float)SURF_W);
 			check("clamped panel: does not cover the one beside it",
@@ -309,8 +322,8 @@ int main(void) {
 			map_th.elem_enabled[OSD_ELEM_LONGITUDE] = true;
 			osd_widgets_draw_all(&s, &map_th, font, &st, els, n, &g, 1000);
 
-			const bool panels = st.layout[OSD_ELEM_LATITUDE].valid &&
-								st.layout[OSD_ELEM_LONGITUDE].valid;
+			const bool panels = osd_widgets_placement(&st, OSD_ELEM_LATITUDE, NULL, NULL, NULL, NULL) &&
+								osd_widgets_placement(&st, OSD_ELEM_LONGITUDE, NULL, NULL, NULL, NULL);
 			char label[96];
 			snprintf(label, sizeof(label), "%s: %s", cases[c].name,
 				cases[c].expect_map ? "draws a map" : "draws value panels");
@@ -343,7 +356,7 @@ int main(void) {
 		memset(buf, 0, (size_t)SURF_W * SURF_H * 4);
 		osd_surface_init(&s, buf, SURF_W, SURF_H, SURF_W * 4);
 		osd_widgets_draw_all(&s, &map_th, font, &st, els, n, &g, 1000);
-		const bool map_first = !st.layout[OSD_ELEM_LATITUDE].valid;
+		const bool map_first = !osd_widgets_placement(&st, OSD_ELEM_LATITUDE, NULL, NULL, NULL, NULL);
 		check("half-drawn: a good frame draws the map", map_first);
 
 		// The next frame catches latitude mid-redraw: the symbol is there and a
@@ -358,9 +371,10 @@ int main(void) {
 		osd_surface_init(&s, buf, SURF_W, SURF_H, SURF_W * 4);
 		osd_widgets_draw_all(&s, &map_th, font, &st, els, n, &g, 1100);
 		check("half-drawn: the map survives the bad frame",
-			!st.layout[OSD_ELEM_LATITUDE].valid);
+			!osd_widgets_placement(&st, OSD_ELEM_LATITUDE, NULL, NULL, NULL, NULL));
 		check("half-drawn: the good reading is kept",
-			st.last[OSD_ELEM_LATITUDE].value > 52.47f && st.last[OSD_ELEM_LATITUDE].value < 52.48f);
+			osd_widgets_cached(&st, OSD_ELEM_LATITUDE)->value > 52.47f &&
+				osd_widgets_cached(&st, OSD_ELEM_LATITUDE)->value < 52.48f);
 	}
 
 	// --- the compass bar. It carries no value, only a position, so the two
@@ -398,7 +412,7 @@ int main(void) {
 		osd_widgets_draw_all(&s, &hd, font, &st, els, n, &g, 1000);
 
 		// Drawn, but not as a panel: no layout slot is claimed for it.
-		check("compass: not laid out as a panel", !st.layout[OSD_ELEM_HEADING_BAR].valid);
+		check("compass: not laid out as a panel", !osd_widgets_placement(&st, OSD_ELEM_HEADING_BAR, NULL, NULL, NULL, NULL));
 
 		// Pixels landed somewhere across the bar's own row band.
 		int lit = 0;
@@ -409,16 +423,90 @@ int main(void) {
 		check("compass: something was actually drawn", lit > 2000);
 
 		// And the panel beneath it was pushed clear rather than buried.
-		check("compass: the panel below it is placed", st.layout[OSD_ELEM_MAH].valid);
+		check("compass: the panel below it is placed", osd_widgets_placement(&st, OSD_ELEM_MAH, NULL, NULL, NULL, NULL));
 		{
 			float bx, by, bw, bh;
 			osd_widgets_heading_box(&hd, (float)(8 + 22 * CELL_W) + (float)(9 * CELL_W) * 0.5f,
 				(float)CELL_H + (float)CELL_H * 0.5f, &bx, &by, &bw, &bh);
-			const float px = st.layout[OSD_ELEM_MAH].x, py = st.layout[OSD_ELEM_MAH].y;
-			const float pw = st.layout[OSD_ELEM_MAH].w, ph = st.layout[OSD_ELEM_MAH].h;
+			const float px = PLACE_x(OSD_ELEM_MAH), py = PLACE_y(OSD_ELEM_MAH);
+			const float pw = PLACE_w(OSD_ELEM_MAH), ph = PLACE_h(OSD_ELEM_MAH);
 			const bool clear = px + pw <= bx || bx + bw <= px || py + ph <= by || by + bh <= py;
 			check("compass: the panel below is pushed clear of it", clear);
 		}
+	}
+
+	// --- two of the same kind on screen at once.
+	//
+	// Betaflight draws core and ESC temperature with the same symbol, so a pilot
+	// who places both gets two temperature elements. Keyed on type alone they
+	// shared one cache slot and one layout: each frame overwrote the other, so
+	// both flickered and neither held still.
+	{
+		osd_widget_state_t st;
+		osd_widgets_state_init(&st);
+		osd_grid_t g = {CELL_W, CELL_H, 8, 0, NULL, NULL};
+		osd_surface_t s;
+
+		clear_grid();
+		put_str(4, 2, "C");
+		grid[4][3] = 0x7A;
+		put_str(4, 4, " 42");
+		grid[4][7] = 0x0E;
+		put_str(10, 2, "E");
+		grid[10][3] = 0x7A;
+		put_str(10, 4, " 68");
+		grid[10][7] = 0x0E;
+
+		osd_element_t els[32];
+		int n = osd_elements_scan(getter, NULL, COLS, ROWS, "BTFL", els, 32);
+		int temps = 0;
+		for (int i = 0; i < n; i++)
+			if (els[i].type == OSD_ELEM_TEMPERATURE)
+				temps++;
+		check("duplicates: both temperatures recognised", temps == 2);
+
+		memset(buf, 0, (size_t)SURF_W * SURF_H * 4);
+		osd_surface_init(&s, buf, SURF_W, SURF_H, SURF_W * 4);
+		const int drawn = osd_widgets_draw_all(&s, &th, font, &st, els, n, &g, 1000);
+		check("duplicates: both drawn", drawn == 2);
+
+		// Two live slots, not one overwriting the other.
+		int used = 0;
+		for (int i = 0; i < OSD_WIDGET_SLOTS; i++)
+			if (st.slots[i].used && st.slots[i].el.type == OSD_ELEM_TEMPERATURE)
+				used++;
+		check("duplicates: a slot each", used == 2);
+
+		// And they keep their own positions rather than converging.
+		float ys[2];
+		int k = 0;
+		for (int i = 0; i < OSD_WIDGET_SLOTS && k < 2; i++)
+			if (st.slots[i].used && st.slots[i].el.type == OSD_ELEM_TEMPERATURE &&
+				st.slots[i].layout_valid)
+				ys[k++] = st.slots[i].y;
+		check("duplicates: placed apart", k == 2 && ys[0] != ys[1]);
+
+		// Values do not cross over: each slot keeps the reading from its own row.
+		bool got42 = false, got68 = false;
+		for (int i = 0; i < OSD_WIDGET_SLOTS; i++) {
+			if (!st.slots[i].used || st.slots[i].el.type != OSD_ELEM_TEMPERATURE)
+				continue;
+			if (st.slots[i].el.row == 4 && st.slots[i].el.value > 41.9f &&
+				st.slots[i].el.value < 42.1f)
+				got42 = true;
+			if (st.slots[i].el.row == 10 && st.slots[i].el.value > 67.9f &&
+				st.slots[i].el.value < 68.1f)
+				got68 = true;
+		}
+		check("duplicates: each keeps its own reading", got42 && got68);
+
+		// A second frame must reuse the same two slots, not add more.
+		osd_widgets_draw_all(&s, &th, font, &st, els, n, &g, 1100);
+		used = 0;
+		for (int i = 0; i < OSD_WIDGET_SLOTS; i++)
+			if (st.slots[i].used && st.slots[i].el.type == OSD_ELEM_TEMPERATURE)
+				used++;
+		check("duplicates: slots are reused, not grown", used == 2);
 	}
 
 	printf("\n%s (%d failures)\n", fails ? "FAILURES" : "ALL PASS", fails);
