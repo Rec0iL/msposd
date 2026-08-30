@@ -519,6 +519,9 @@ int main(void) {
 		FILE *f = fopen(path, "w");
 		fprintf(f, "; written by the ground station\n"
 				   "source = WFB-NG\n"
+				   "channel = 149\n"
+				   "freq_mhz = 5745\n"
+				   "bandwidth_mhz = 20\n"
 				   "quality = 97\n"
 				   "loss = 0.4\n"
 				   "bitrate_mbps = 12.4\n"
@@ -536,6 +539,8 @@ int main(void) {
 		check("link: rssi read past its comment", ls.rssi_valid[0] && ls.rssi_dbm[0] == -58);
 		check("link: snr read", ls.snr_valid[1] && ls.snr_db[1] == 11);
 		check("link: quality read", ls.quality_pct > 96.9f && ls.quality_pct < 97.1f);
+		check("link: tuning read", ls.channel == 149 && ls.freq_mhz == 5745 &&
+									   ls.bandwidth_mhz == 20);
 
 		// A reader polling ten times a second will catch a write in progress. That
 		// must keep the last good numbers rather than blanking the widget.

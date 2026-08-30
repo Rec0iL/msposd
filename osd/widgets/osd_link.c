@@ -128,6 +128,43 @@ static void footer_text(const osd_link_stats_t *s, char *out, size_t n) {
 		snprintf(out + used, n - used, "%s%.1f Mbps", used ? "  " : "", s->bitrate_mbps);
 }
 
+// What the receiver is tuned to, right-aligned in the header band.
+//
+// Built longest-first and shortened until it fits: the vertical style is barely
+// wider than four numbers, while the horizontal one has most of a raised plate
+// doing nothing. Rather than pick one wording for both and have it clipped in
+// the narrow case, the widest form that fits wins.
+static void tuning_text(const osd_link_stats_t *st, osd_font_t *font, float size, float avail,
+	char *out, size_t n) {
+	out[0] = '\0';
+	if (st->channel <= 0 && st->freq_mhz <= 0)
+		return;
+
+	char candidates[4][40];
+	int count = 0;
+	if (st->channel > 0 && st->freq_mhz > 0 && st->bandwidth_mhz > 0)
+		snprintf(candidates[count++], 40, "CH%d  %d  %dMHz", st->channel, st->freq_mhz,
+			st->bandwidth_mhz);
+	if (st->channel > 0 && st->freq_mhz > 0)
+		snprintf(candidates[count++], 40, "CH%d  %d", st->channel, st->freq_mhz);
+	if (st->channel > 0)
+		snprintf(candidates[count++], 40, "CH%d", st->channel);
+	else if (st->freq_mhz > 0)
+		snprintf(candidates[count++], 40, "%dMHz", st->freq_mhz);
+
+	for (int i = 0; i < count; i++) {
+		osd_text_metrics_t m = {0};
+		osd_text_measure(font, size, candidates[i], &m);
+		if ((float)m.width <= avail) {
+			snprintf(out, n, "%s", candidates[i]);
+			return;
+		}
+	}
+	// Nothing fits; the shortest is still better than a clipped longer one.
+	if (count > 0)
+		snprintf(out, n, "%s", candidates[count - 1]);
+}
+
 void osd_link_draw(osd_surface_t *s, osd_font_t *font, float x, float y,
 	const osd_link_params_t *p, const osd_link_stats_t *st, bool stale) {
 	if (!s || !p || !st)
@@ -154,8 +191,25 @@ void osd_link_draw(osd_surface_t *s, osd_font_t *font, float x, float y,
 	const float value_sz = p->value_size * k;
 
 	// Header: who is reporting, and a stale marker when they have stopped.
-	osd_text_draw_tracked(s, font, label_sz, (int)(x + px), (int)(y + label_sz + 8.0f * k),
+	const float head_baseline = y + label_sz + 8.0f * k;
+	osd_text_draw_tracked(s, font, label_sz, (int)(x + px), (int)head_baseline,
 		stale ? "LINK  NO DATA" : st->source, p->label_tracking * k, stale ? p->crit : p->label);
+
+	// What the receiver is tuned to, on the raised part of the plate. The
+	// source caption sits in the stepped corner to the left of it, so the space
+	// available starts after the step rather than at the plate's edge.
+	{
+		const float step = w * 0.34f;
+		const float tune_sz = label_sz * 1.15f;
+		char tune[40];
+		tuning_text(st, font, tune_sz, w - step - px * 2.0f, tune, sizeof(tune));
+		if (tune[0]) {
+			osd_text_metrics_t m = {0};
+			osd_text_measure(font, tune_sz, tune, &m);
+			osd_text_draw(s, font, tune_sz, (int)(x + w - px - (float)m.width),
+				(int)(head_baseline + 2.0f * k), tune, p->accent);
+		}
+	}
 
 	const float bar_h = p->bar_height * k * 0.62f;
 

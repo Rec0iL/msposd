@@ -44,6 +44,13 @@ typedef struct {
 	bool rssi_valid[OSD_LINK_MAX_ANTENNAS];
 	bool snr_valid[OSD_LINK_MAX_ANTENNAS];
 
+	// What the receiver is tuned to. Zero means the ground station did not say.
+	// Channel and frequency are both carried because stations report one or the
+	// other and pilots think in both.
+	int channel;
+	int freq_mhz;
+	int bandwidth_mhz;
+
 	// Negative means the ground station did not report it, which is different
 	// from reporting zero - a link quality of 0 is a dead link, an absent one is
 	// a station that does not measure it.

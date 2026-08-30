@@ -26,6 +26,7 @@ int main(int argc, char **argv) {
 			st.snr_db[i]=n[i];   st.snr_valid[i]=true;
 		}
 		st.quality_pct = 97.0f; st.loss_pct = 0.4f; st.bitrate_mbps = 12.4f;
+		st.channel = 149; st.freq_mhz = 5745; st.bandwidth_mhz = 20;
 	} else {
 		// APFPV: two adapters, two aerials each, and no SNR at all - the WiFi
 		// driver does not report it. These dBm values are what PixelPilot's
@@ -37,6 +38,8 @@ int main(int argc, char **argv) {
 		// throughput belongs to the stream rather than the radio, so it is
 		// reported here too.
 		st.quality_pct = -1.0f; st.loss_pct = -1.0f; st.bitrate_mbps = 11.4f;
+		// No channel: PixelPilot parses the WiFi driver's debug file for RSSI
+		// and link state only, and nothing else there knows the frequency.
 	}
 
 	const int N = 2;

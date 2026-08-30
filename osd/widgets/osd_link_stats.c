@@ -81,6 +81,15 @@ bool osd_link_stats_load(const char *path, osd_link_stats_t *out, uint64_t now_m
 		} else if (!strcasecmp(key, "loss")) {
 			s.loss_pct = strtof(val, NULL);
 			saw_anything = true;
+		} else if (!strcasecmp(key, "channel")) {
+			s.channel = atoi(val);
+			saw_anything = true;
+		} else if (!strcasecmp(key, "freq_mhz")) {
+			s.freq_mhz = atoi(val);
+			saw_anything = true;
+		} else if (!strcasecmp(key, "bandwidth_mhz")) {
+			s.bandwidth_mhz = atoi(val);
+			saw_anything = true;
 		} else if (!strcasecmp(key, "bitrate_mbps")) {
 			s.bitrate_mbps = strtof(val, NULL);
 			saw_anything = true;
