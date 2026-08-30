@@ -33,7 +33,10 @@ int main(int argc, char **argv) {
 		snprintf(st.source, sizeof(st.source), "APFPV");
 		const int r[4] = {-53, -62, -70, -88};
 		for (int i = 0; i < 4; i++) { st.rssi_dbm[i]=r[i]; st.rssi_valid[i]=true; }
-		st.quality_pct = -1.0f; st.loss_pct = -1.0f; st.bitrate_mbps = -1.0f;
+		// The driver counts no packets, so quality and loss stay absent - but the
+		// throughput belongs to the stream rather than the radio, so it is
+		// reported here too.
+		st.quality_pct = -1.0f; st.loss_pct = -1.0f; st.bitrate_mbps = 11.4f;
 	}
 
 	const int N = 2;

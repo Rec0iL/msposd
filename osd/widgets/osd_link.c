@@ -62,6 +62,11 @@ static void plate(osd_surface_t *s, float x, float y, float w, float h, float ta
 #define LINK_H_BAR 14.0f  // its bar
 #define LINK_H_SNR 20.0f
 
+// Breathing room under the last row when no footer follows it. The footer's own
+// band used to supply this by accident; with APFPV, which reports neither SNR
+// nor packet counts, the bars ended up sitting on the plate's bottom edge.
+#define LINK_BOTTOM_PAD 12.0f
+
 static int antenna_count(const osd_link_stats_t *s) {
 	if (!s || !s->valid)
 		return 0;
@@ -100,10 +105,12 @@ void osd_link_measure(
 		const int cols = n > 0 ? n : 1;
 		*out_w = ((float)cols * LINK_COL_W + 24.0f) * k;
 		const float snr = has_snr(s) ? LINK_H_SNR : 0.0f;
-		*out_h = (LINK_HEAD_H + LINK_H_CAP + LINK_H_VAL + LINK_H_BAR + snr + foot) * k;
+		const float tail = foot > 0.0f ? foot : LINK_BOTTOM_PAD;
+		*out_h = (LINK_HEAD_H + LINK_H_CAP + LINK_H_VAL + LINK_H_BAR + snr + tail) * k;
 	} else {
+		const float tail = foot > 0.0f ? foot : LINK_BOTTOM_PAD;
 		*out_w = LINK_VERT_W * k;
-		*out_h = (LINK_HEAD_H + (float)n * LINK_ROW_H + foot + 8.0f) * k;
+		*out_h = (LINK_HEAD_H + (float)n * LINK_ROW_H + tail) * k;
 	}
 }
 
@@ -143,7 +150,6 @@ void osd_link_draw(osd_surface_t *s, osd_font_t *font, float x, float y,
 	plate(s, x, y, w, h, tab, ch, p->fill, p->edge, p->accent);
 
 	const float px = p->pad_x * k;
-	const float py = p->pad_y * k;
 	const float label_sz = p->label_size * k;
 	const float value_sz = p->value_size * k;
 
@@ -155,13 +161,18 @@ void osd_link_draw(osd_surface_t *s, osd_font_t *font, float x, float y,
 
 	if (p->style == OSD_LINK_HORIZONTAL) {
 		const float col_w = LINK_COL_W * k;
-		// Four bands per column, each with its own row so nothing lands on the
-		// footer: caption, the dBm number, its bar, SNR. Reading down a column
-		// gives one antenna; reading across compares them.
-		const float cap_y = y + (LINK_HEAD_H + LINK_H_CAP) * k;
-		const float val_y = cap_y + LINK_H_VAL * k;
-		const float bar_y = val_y + (LINK_H_BAR - 10.0f) * k;
-		const float snr_y = val_y + (LINK_H_BAR + LINK_H_SNR) * k;
+		// Four bands per column: caption, the dBm number, its bar, SNR. Each
+		// baseline sits inside its own band rather than on its lower edge -
+		// hanging text off a band's bottom left the descenders below the plate
+		// whenever nothing followed to cover for it.
+		const float cap_top = y + LINK_HEAD_H * k;
+		const float val_top = cap_top + LINK_H_CAP * k;
+		const float bar_top = val_top + LINK_H_VAL * k;
+		const float snr_top = bar_top + LINK_H_BAR * k;
+		const float cap_y = cap_top + LINK_H_CAP * k * 0.78f;
+		const float val_y = val_top + LINK_H_VAL * k * 0.80f;
+		const float bar_y = bar_top + (LINK_H_BAR * k - bar_h) * 0.5f;
+		const float snr_y = snr_top + LINK_H_SNR * k * 0.5f + label_sz * 1.15f * 0.36f;
 		for (int i = 0; i < n; i++) {
 			const float cx = x + px + (float)i * col_w;
 			char t[16];
@@ -223,8 +234,12 @@ void osd_link_draw(osd_surface_t *s, osd_font_t *font, float x, float y,
 	if (has_footer(st)) {
 		char t[48];
 		footer_text(st, t, sizeof(t));
-		osd_text_draw(s, font, label_sz * 1.25f, (int)(x + px), (int)(y + h - py - 2.0f * k), t,
-			p->accent);
+		// Centred in the footer band rather than measured up from the bottom
+		// edge: pad_y is small next to this text, so hanging it off the edge put
+		// the descenders almost on the plate's border.
+		const float band_top = y + h - LINK_FOOT_H * k;
+		const float baseline = band_top + LINK_FOOT_H * k * 0.5f + label_sz * 1.25f * 0.36f;
+		osd_text_draw(s, font, label_sz * 1.25f, (int)(x + px), (int)baseline, t, p->accent);
 	}
 
 	osd_text_set_outline(prev_on, prev_col, prev_px);
