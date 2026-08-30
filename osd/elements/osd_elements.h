@@ -28,6 +28,12 @@ typedef enum {
 	OSD_ELEM_FLIGHT_TIME,
 	OSD_ELEM_FLIGHT_MODE,
 	OSD_ELEM_WARNING,
+	// The firmware's compass bar: a contiguous run of graphic glyphs. Only its
+	// *position* is of interest - the heading itself comes from MSP_ATTITUDE,
+	// the same source the artificial horizon uses. Recognising it is how the
+	// pilot says "put a heading display here", exactly as latitude and
+	// longitude say where the map goes.
+	OSD_ELEM_HEADING_BAR,
 	OSD_ELEM_TYPE_COUNT
 } osd_element_type_t;
 

@@ -23,6 +23,9 @@
 #define SYM_RSSI 0x01
 #define SYM_LAT 0x03
 #define SYM_LON 0x04
+// The compass bar: a run out of the heading-arrow block, which is what makes it
+// recognisable without knowing anything about the field's format.
+#define SYM_HEADING_FIRST 0xC8
 
 static uint16_t grid[ROWS][COLS];
 
@@ -358,6 +361,64 @@ int main(void) {
 			!st.layout[OSD_ELEM_LATITUDE].valid);
 		check("half-drawn: the good reading is kept",
 			st.last[OSD_ELEM_LATITUDE].value > 52.47f && st.last[OSD_ELEM_LATITUDE].value < 52.48f);
+	}
+
+	// --- the compass bar. It carries no value, only a position, so the two
+	// filters that drop valueless elements have to let it through - and it must
+	// be drawn as the compass rather than as a panel with nothing in it.
+	{
+		osd_widget_state_t st;
+		osd_widgets_state_init(&st);
+		osd_grid_t g = {CELL_W, CELL_H, 8, 0, NULL, NULL};
+		osd_surface_t s;
+
+		clear_grid();
+		// A nine-cell bar centred at the top, as both firmwares draw it.
+		for (int i = 0; i < 9; i++)
+			grid[1][22 + i] = (uint16_t)(SYM_HEADING_FIRST + (i % 6));
+		// Something below it that a wide compass would otherwise sit on.
+		put_trailing_at(2, 26, "1250", SYM_MAH);
+
+		osd_element_t els[32];
+		int n = osd_elements_scan(getter, NULL, COLS, ROWS, "INAV", els, 32);
+		bool found = false;
+		for (int i = 0; i < n; i++)
+			if (els[i].type == OSD_ELEM_HEADING_BAR)
+				found = true;
+		check("compass: the bar is recognised", found);
+
+		osd_theme_t hd = th;
+		hd.heading_style = 0; // band
+		hd.heading_size = 480.0f;
+		st.heading_deg = 274.0f;
+		st.course_deg = 289.0f;
+		st.ground_speed_mps = 18.0f;
+		memset(buf, 0, (size_t)SURF_W * SURF_H * 4);
+		osd_surface_init(&s, buf, SURF_W, SURF_H, SURF_W * 4);
+		osd_widgets_draw_all(&s, &hd, font, &st, els, n, &g, 1000);
+
+		// Drawn, but not as a panel: no layout slot is claimed for it.
+		check("compass: not laid out as a panel", !st.layout[OSD_ELEM_HEADING_BAR].valid);
+
+		// Pixels landed somewhere across the bar's own row band.
+		int lit = 0;
+		for (int y = 0; y < 200; y++)
+			for (int x = 0; x < SURF_W; x++)
+				if (buf[((size_t)y * SURF_W + x) * 4 + 3] != 0)
+					lit++;
+		check("compass: something was actually drawn", lit > 2000);
+
+		// And the panel beneath it was pushed clear rather than buried.
+		check("compass: the panel below it is placed", st.layout[OSD_ELEM_MAH].valid);
+		{
+			float bx, by, bw, bh;
+			osd_widgets_heading_box(&hd, (float)(8 + 22 * CELL_W) + (float)(9 * CELL_W) * 0.5f,
+				(float)CELL_H + (float)CELL_H * 0.5f, &bx, &by, &bw, &bh);
+			const float px = st.layout[OSD_ELEM_MAH].x, py = st.layout[OSD_ELEM_MAH].y;
+			const float pw = st.layout[OSD_ELEM_MAH].w, ph = st.layout[OSD_ELEM_MAH].h;
+			const bool clear = px + pw <= bx || bx + bw <= px || py + ph <= by || by + bh <= py;
+			check("compass: the panel below is pushed clear of it", clear);
+		}
 	}
 
 	printf("\n%s (%d failures)\n", fails ? "FAILURES" : "ALL PASS", fails);

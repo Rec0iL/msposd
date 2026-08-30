@@ -1,5 +1,6 @@
 #include "osd_widgets.h"
 
+#include "osd_heading.h"
 #include "osd_tiles.h"
 
 #include <math.h>
@@ -424,6 +425,15 @@ static bool element_is_textual(osd_element_type_t type) {
 		   type == OSD_ELEM_WARNING;
 }
 
+// Elements the recogniser locates but reads nothing out of. The compass bar is
+// the only one so far: its glyphs say which way the aircraft points, but we
+// take the heading from MSP_ATTITUDE instead, so the run is there purely to say
+// where the display goes. Without this it would be dropped for having no value,
+// exactly like a numeric element that failed to parse.
+static bool element_is_position_only(osd_element_type_t type) {
+	return type == OSD_ELEM_HEADING_BAR;
+}
+
 // Pixel rectangle of a cell run, via the host's mapping when it provides one.
 static void cell_rect(const osd_grid_t *g, int col, int row, int span, int *x, int *y, int *w,
 	int *h) {
@@ -435,6 +445,51 @@ static void cell_rect(const osd_grid_t *g, int col, int row, int span, int *x, i
 	*y = g->off_y + row * g->cell_h;
 	*w = span * g->cell_w;
 	*h = g->cell_h;
+}
+
+// Initial great-circle bearing from one fix to another, in compass degrees.
+// Rhumb would be simpler, but home is usually within a few km and over that
+// distance the two agree to well under a degree - and this one stays right if
+// somebody flies a long way north.
+static float bearing_deg(double lat1, double lon1, double lat2, double lon2) {
+	const double r = M_PI / 180.0;
+	const double dl = (lon2 - lon1) * r;
+	const double y = sin(dl) * cos(lat2 * r);
+	const double x = cos(lat1 * r) * sin(lat2 * r) - sin(lat1 * r) * cos(lat2 * r) * cos(dl);
+	double b = atan2(y, x) / r;
+	if (b < 0.0)
+		b += 360.0;
+	return (float)b;
+}
+
+// Bounding box of the heading display, for collision avoidance. Each style
+// spreads differently around its centre - a rose is as tall as it is wide, a
+// band is a letterbox - and a single box would either let panels sit on top of
+// it or push them much further away than needed.
+void osd_widgets_heading_box(const osd_theme_t *th, float cx, float cy, float *x, float *y,
+	float *w, float *h) {
+	const float size = th->heading_size;
+	switch (th->heading_style) {
+	case 1: // rose
+	case 3: // navball
+		*w = size * 1.15f;
+		*h = size * 1.30f;
+		break;
+	case 2: // ring
+		*w = size;
+		*h = size * 0.18f + 90.0f;
+		break;
+	case 4: // numeric
+		*w = size;
+		*h = 90.0f;
+		break;
+	default: // band
+		*w = size;
+		*h = 130.0f;
+		break;
+	}
+	*x = cx - *w * 0.5f;
+	*y = cy - *h * 0.5f;
 }
 
 // Axis-aligned rectangle overlap.
@@ -798,6 +853,11 @@ int osd_widgets_draw_all(osd_surface_t *s, const osd_theme_t *th, osd_font_t *fo
 	if (th->mode != OSD_MODE_FANCY)
 		return 0;
 
+	// The text outline is a look applied to every string, so it is set once here
+	// rather than per widget. Without this the theme's key parsed fine and did
+	// nothing: only the compass, which sets its own, was ever outlined.
+	osd_text_set_outline(th->text_outline, th->text_outline_color, th->text_outline_width);
+
 	// Track the peak before drawing so the bar and the "/67A" agree this frame.
 	for (int i = 0; i < count; i++) {
 		if (els[i].type == OSD_ELEM_CURRENT && els[i].value_valid && els[i].value > st->current_peak)
@@ -814,6 +874,12 @@ int osd_widgets_draw_all(osd_surface_t *s, const osd_theme_t *th, osd_font_t *fo
 	osd_element_t map_lat_v, map_lon_v;
 	bool have_map = false, map_drawn = false;
 
+	// Where the compass display goes, in pixels. The flight controller's bar is
+	// a fixed-width run of glyphs; the display that replaces it is sized by the
+	// theme, so only the centre of the run is used.
+	bool have_heading = false;
+	float hdg_cx = 0.0f, hdg_cy = 0.0f;
+
 	// Refresh the cache with everything visible this frame.
 	for (int i = 0; i < count; i++) {
 		const osd_element_t *e = &els[i];
@@ -827,7 +893,8 @@ int osd_widgets_draw_all(osd_surface_t *s, const osd_theme_t *th, osd_font_t *fo
 		// the widget blinks out - and for latitude and longitude, the whole map
 		// goes with it for a frame. The hold below already covers an element
 		// that vanishes; this covers one that arrives broken.
-		if (!e->value_valid && !element_is_textual(e->type) && st->last_seen_ms[e->type] != 0 &&
+		if (!e->value_valid && !element_is_textual(e->type) &&
+			!element_is_position_only(e->type) && st->last_seen_ms[e->type] != 0 &&
 			(float)(now_ms - st->last_seen_ms[e->type]) <= th->element_hold_ms)
 			continue;
 
@@ -847,12 +914,38 @@ int osd_widgets_draw_all(osd_surface_t *s, const osd_theme_t *th, osd_font_t *fo
 		const osd_element_t *e = &st->last[ty];
 		// Messages have to count as textual here too, or every failsafe is
 		// recognised and then dropped silently for having no numeric value.
-		const bool textual = element_is_textual(e->type);
+		const bool textual = element_is_textual(e->type) || element_is_position_only(e->type);
 		if ((!e->value_valid && !textual) || !osd_theme_element_enabled(th, e->type))
 			continue;
 		if (osd_theme_element_opacity(th, e->type) <= 0.01f)
 			continue;
 		list[n++] = *e;
+	}
+
+	for (int i = 0; i < n; i++) {
+		if (list[i].type != OSD_ELEM_HEADING_BAR)
+			continue;
+		int hx, hy, hw, hh;
+		cell_rect(grid, list[i].col, list[i].row, list[i].width, &hx, &hy, &hw, &hh);
+		hdg_cx = (float)hx + (float)hw * 0.5f;
+		hdg_cy = (float)hy + (float)hh * 0.5f;
+		have_heading = osd_theme_element_opacity(th, OSD_ELEM_HEADING_BAR) > 0.01f;
+
+		// Keep it on screen. Both firmwares put the compass bar hard against the
+		// top or bottom edge, where it is one row tall; a rose is closer to
+		// thirty, so centring it on the run drops half the dial outside the
+		// viewport. Same reasoning as the panel clamp further down.
+		float bx, by, bw, bh;
+		osd_widgets_heading_box(th, hdg_cx, hdg_cy, &bx, &by, &bw, &bh);
+		if (bx < 0.0f)
+			hdg_cx -= bx;
+		else if (bx + bw > (float)s->width)
+			hdg_cx -= bx + bw - (float)s->width;
+		if (by < 0.0f)
+			hdg_cy -= by;
+		else if (by + bh > (float)s->height)
+			hdg_cy -= by + bh - (float)s->height;
+		break;
 	}
 
 	if (th->map_enabled) {
@@ -909,16 +1002,69 @@ int osd_widgets_draw_all(osd_surface_t *s, const osd_theme_t *th, osd_font_t *fo
 	// so it no longer reaches the elements that define it: clearing everything
 	// first removes the coordinate text, and drawing the map second means the
 	// clear cannot punch holes through the tiles.
+	// Home is where the aircraft armed: the first valid fix after the disarmed
+	// -> armed edge, which is what the flight controller uses too. Captured from
+	// the cache rather than inside the map block, because the compass wants a
+	// home bearing whether or not a map is on screen.
+	const osd_element_t *fix_lat = &st->last[OSD_ELEM_LATITUDE];
+	const osd_element_t *fix_lon = &st->last[OSD_ELEM_LONGITUDE];
+	const bool have_fix = fix_lat->value_valid && fix_lon->value_valid &&
+						  st->last_seen_ms[OSD_ELEM_LATITUDE] != 0 &&
+						  st->last_seen_ms[OSD_ELEM_LONGITUDE] != 0;
+	if (st->prev_armed && !st->home_valid && have_fix) {
+		st->home_lat = fix_lat->value;
+		st->home_lon = fix_lon->value;
+		st->home_valid = true;
+	}
+
 	if (have_map) {
-		// Home is where the aircraft armed: the first valid fix after the
-		// disarmed -> armed edge, which is what the flight controller uses too.
-		if (st->prev_armed && !st->home_valid) {
-			st->home_lat = map_lat_v.value;
-			st->home_lon = map_lon_v.value;
-			st->home_valid = true;
-		}
 		draw_map(s, th, font, &map_lat_v, &map_lon_v, grid, st, now_ms);
 		map_drawn = true;
+	}
+
+	if (have_heading) {
+		// A compass that lags a turn is worse than no compass, so this is eased
+		// on its own short constant rather than the map's - see the field's
+		// comment. 200ms takes the jitter off an MSP_ATTITUDE stream without
+		// being visible as lag.
+		const bool track_ok = st->ground_speed_mps > 1.5f;
+		osd_heading_smooth_update(
+			&st->heading_smooth, st->heading_deg, st->course_deg, track_ok, now_ms, 200.0f);
+
+		const float op = osd_theme_element_opacity(th, OSD_ELEM_HEADING_BAR) * th->global_opacity;
+		osd_heading_params_t hp = {0};
+		hp.style = (osd_heading_style_t)th->heading_style;
+		hp.size = th->heading_size * th->global_scale *
+				  osd_theme_element_scale(th, OSD_ELEM_HEADING_BAR);
+		hp.span_deg = th->heading_span;
+		hp.show_track = th->heading_show_track;
+		hp.flip = th->heading_flip;
+		hp.lens = th->heading_lens;
+		hp.outline = th->heading_outline;
+		hp.outline_color = th->text_outline_color;
+		hp.outline_px = th->heading_outline_width;
+		hp.accent = osd_theme_apply_opacity(th->accent, op);
+		hp.label = osd_theme_apply_opacity(th->label, op);
+		// `good`, not `track`: the theme's `track` is the unfilled trough of a
+		// progress bar, which is nearly black. The ground-track marker wants the
+		// green that means "healthy" everywhere else on the screen.
+		hp.track = osd_theme_apply_opacity(th->good, op);
+		hp.home = osd_theme_apply_opacity(th->warn, op);
+		hp.fill = osd_theme_apply_opacity(th->panel_fill, op);
+		hp.edge = osd_theme_apply_opacity(th->panel_edge, op);
+		hp.opacity = op;
+		hp.heading_deg = osd_heading_smooth_heading(&st->heading_smooth);
+		hp.track_deg = osd_heading_smooth_track(&st->heading_smooth);
+		hp.track_valid = track_ok;
+		hp.pitch_deg = st->pitch_deg;
+		hp.roll_deg = st->roll_deg;
+		// Home only means something once we know where it is and where we are.
+		if (st->home_valid && have_fix) {
+			hp.home_deg =
+				bearing_deg(fix_lat->value, fix_lon->value, st->home_lat, st->home_lon);
+			hp.home_valid = true;
+		}
+		osd_heading_draw(s, font, hdg_cx, hdg_cy, &hp);
 	}
 
 	// Signature of what is on screen and where. Only a change here justifies
@@ -939,8 +1085,10 @@ int osd_widgets_draw_all(osd_surface_t *s, const osd_theme_t *th, osd_font_t *fo
 			st->layout[i].valid = false;
 	}
 
-	float placed_x[OSD_ELEM_TYPE_COUNT + 1], placed_y[OSD_ELEM_TYPE_COUNT + 1];
-	float placed_w[OSD_ELEM_TYPE_COUNT + 1], placed_h[OSD_ELEM_TYPE_COUNT + 1];
+	// +2 for the two seeded rectangles: the map and the compass, neither of
+	// which is a panel but both of which panels must avoid.
+	float placed_x[OSD_ELEM_TYPE_COUNT + 2], placed_y[OSD_ELEM_TYPE_COUNT + 2];
+	float placed_w[OSD_ELEM_TYPE_COUNT + 2], placed_h[OSD_ELEM_TYPE_COUNT + 2];
 	int placed = 0;
 	int drawn = 0;
 
@@ -957,10 +1105,18 @@ int osd_widgets_draw_all(osd_surface_t *s, const osd_theme_t *th, osd_font_t *fo
 		}
 	}
 
+	if (have_heading) {
+		osd_widgets_heading_box(th, hdg_cx, hdg_cy, &placed_x[placed], &placed_y[placed], &placed_w[placed],
+			&placed_h[placed]);
+		placed++;
+	}
+
 	for (int i = 0; i < n; i++) {
 		const osd_element_t *e = &list[i];
 		if (map_drawn && (e->type == OSD_ELEM_LATITUDE || e->type == OSD_ELEM_LONGITUDE))
 			continue; // already rendered as the map
+		if (e->type == OSD_ELEM_HEADING_BAR)
+			continue; // already rendered as the compass
 		float opacity = osd_theme_element_opacity(th, e->type);
 		float scale = osd_theme_element_scale(th, e->type);
 

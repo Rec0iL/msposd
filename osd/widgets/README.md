@@ -44,7 +44,8 @@ turns every widget off in one key.
 gcc -Wall -I. -I bmp/lib -I osd/widgets -D_GNU_SOURCE -o test_layout \
     osd/widgets/test_layout.c osd/elements/osd_elements.c osd/widgets/osd_paint.c \
     osd/widgets/osd_text.c osd/widgets/osd_theme.c osd/widgets/osd_widgets.c \
-    osd/widgets/osd_map.c osd/widgets/osd_tiles.c bmp/lib/schrift.c \
+    osd/widgets/osd_map.c osd/widgets/osd_tiles.c osd/widgets/osd_heading.c \
+    bmp/lib/schrift.c \
     libpng/lodepng.c -lm -lpthread
 ./test_layout    # run from the repo root, it loads the theme font
 ```

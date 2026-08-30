@@ -7,6 +7,7 @@
 #pragma once
 
 #include "../elements/osd_elements.h"
+#include "osd_heading.h"
 #include "osd_map.h"
 #include "osd_paint.h"
 #include "osd_text.h"
@@ -18,12 +19,23 @@ typedef struct {
 	// without the user configuring anything. 0 until a battery is seen.
 	int cell_count;
 	float heading_deg; // aircraft heading, for the map marker
+	// Attitude, for the navball. Filtered on msposd's own fast constant rather
+	// than the heading's slower one: the artificial horizon is drawn from the
+	// same numbers a few hundred pixels away, and the two must not visibly
+	// disagree through a roll.
+	float pitch_deg;
+	float roll_deg;
 	// Ground track, from MSP_RAW_GPS. The map zooms out with speed and leads
 	// along the course, so what is ahead of the aircraft gets the screen.
 	// Course rather than heading: in wind the nose and the track differ.
 	float ground_speed_mps;
 	float course_deg;
 	osd_map_view_t map_view; // smoothed zoom and view centre
+	// Heading and track for the compass display, smoothed on their own clock.
+	// The map's smoothing is far slower - it is a view, and a view that snaps
+	// around is unusable - but a compass that lags a turn by a second is
+	// actively misleading, so the two cannot share one filter.
+	osd_heading_smooth_t heading_smooth;
 	// Launch point, captured at arming like the flight controller does.
 	bool home_valid;
 	double home_lat, home_lon;
@@ -70,6 +82,12 @@ typedef struct {
 	osd_cell_rect_fn cell_rect;
 	void *ctx;
 } osd_grid_t;
+
+/// Bounding box of the compass display, centred on (cx, cy). Panels are pushed
+/// clear of this, so it is exposed rather than kept private: a test that
+/// recomputed the geometry itself could agree with a stale copy of it.
+void osd_widgets_heading_box(
+	const osd_theme_t *th, float cx, float cy, float *x, float *y, float *w, float *h);
 
 /// Returns the number of widgets drawn.
 int osd_widgets_draw_all(osd_surface_t *s,

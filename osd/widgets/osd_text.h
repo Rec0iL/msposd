@@ -38,3 +38,12 @@ int osd_text_draw_tracked(osd_surface_t *s, osd_font_t *f, float size, int x, in
 
 bool osd_text_measure_tracked(osd_font_t *f, float size, const char *text, float tracking,
 	osd_text_metrics_t *out);
+
+/// Draws every subsequent string with an outline behind it. Small light text
+/// over video is unreadable against a bright frame - a dark outline fixes it
+/// everywhere at once, which is why this is global rather than per-widget.
+void osd_text_set_outline(bool on, osd_color_t color, int width_px);
+
+/// Reads it back, so a widget that wants its own outline for a few strings can
+/// put the caller's setting back afterwards instead of guessing at it.
+void osd_text_get_outline(bool *on, osd_color_t *color, int *width_px);

@@ -45,6 +45,28 @@ static void make_sft(SFT *sft, osd_font_t *f, float size) {
 
 // Walks the string accumulating advances and kerning. Rendering uses the same
 // walk, so measured and drawn extents cannot drift apart.
+// Outline state, set once per frame by the widget layer. Global rather than a
+// parameter because it is a look applied to *all* text - threading it through
+// every call site would be noise at each one.
+static bool g_outline_on = false;
+static osd_color_t g_outline_color = 0;
+static int g_outline_px = 1;
+
+void osd_text_set_outline(bool on, osd_color_t color, int width_px) {
+	g_outline_on = on;
+	g_outline_color = color;
+	g_outline_px = width_px < 1 ? 1 : (width_px > 3 ? 3 : width_px);
+}
+
+void osd_text_get_outline(bool *on, osd_color_t *color, int *width_px) {
+	if (on)
+		*on = g_outline_on;
+	if (color)
+		*color = g_outline_color;
+	if (width_px)
+		*width_px = g_outline_px;
+}
+
 static bool walk(osd_font_t *f, float size, const char *text, float tracking,
 	osd_surface_t *s, int pen_x, int baseline, osd_color_t color, int *out_width,
 	int *out_ascent, int *out_descent) {
@@ -96,6 +118,24 @@ static bool walk(osd_font_t *f, float size, const char *text, float tracking,
 					const uint8_t *cov = (const uint8_t *)img.pixels;
 					int gx = (int)(x + gm.leftSideBearing + 0.5f);
 					int gy = baseline + gm.yOffset;
+					// Outline first, then the glyph over it. Eight offsets rather
+					// than four: at four, diagonal strokes show gaps where the
+					// outline should close around them.
+					if (g_outline_on) {
+						const int d = g_outline_px;
+						const int ox[8] = {-d, 0, d, -d, d, -d, 0, d};
+						const int oy[8] = {-d, -d, -d, 0, 0, d, d, d};
+						for (int k = 0; k < 8; k++) {
+							for (int row = 0; row < img.height; row++) {
+								for (int colx = 0; colx < img.width; colx++) {
+									uint8_t a = cov[row * img.width + colx];
+									if (a)
+										osd_blend_px(s, gx + colx + ox[k], gy + row + oy[k],
+											g_outline_color, (float)a / 255.0f);
+								}
+							}
+						}
+					}
 					for (int row = 0; row < img.height; row++) {
 						for (int colx = 0; colx < img.width; colx++) {
 							uint8_t a = cov[row * img.width + colx];

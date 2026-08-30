@@ -1385,6 +1385,11 @@ static void draw_widgets_overlay() {
 	// nose and the track differ, and it is the track the map has to follow.
 	osd_widget_state.ground_speed_mps = (float)last_speed / 100.0f;
 	osd_widget_state.course_deg = (float)last_groundCourse;
+	// Attitude for the navball, in degrees. Taken raw from MSP_ATTITUDE, the
+	// same source the artificial horizon filters - a navball on a slower
+	// constant would visibly lag the ladder through a roll.
+	osd_widget_state.pitch_deg = (float)last_pitch / 10.0f;
+	osd_widget_state.roll_deg = (float)last_roll / 10.0f;
 
 	osd_surface_t surf;
 	osd_surface_init(&surf, (uint8_t *)bmpBuff.pData, bmpBuff.u32Width, bmpBuff.u32Height,

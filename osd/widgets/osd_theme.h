@@ -42,6 +42,13 @@ typedef struct {
 	float pad_x, pad_y, bar_height;
 	float value_size, label_size, label_tracking;
 
+	// Outline behind every string. Small light text over a bright frame is
+	// unreadable without it, and it is cheaper to fix once here than to give
+	// each widget its own backing plate.
+	bool text_outline;
+	osd_color_t text_outline_color;
+	int text_outline_width;
+
 	// hatching
 	float hatch_period, hatch_duty, hatch_slant;
 
@@ -96,6 +103,25 @@ typedef struct {
 	float ahi_level_max;    // degrees
 	float ahi_moderate_max; // degrees
 	int ahi_steep_thickness;
+
+	// Heading display. The firmware's compass bar says *where* it goes; the
+	// heading itself comes from MSP_ATTITUDE, so nothing here depends on
+	// decoding the bar's glyphs. Both firmwares fix the bar's width, which is
+	// why the size is set here rather than taken from the run.
+	int heading_style;      // 0 band, 1 rose, 2 ring, 3 navball, 4 numeric
+	float heading_size;     // band/ring width, or rose/navball diameter
+	float heading_span;     // band only: degrees visible across the tape, px
+	bool heading_show_track; // a second marker at the ground course
+	bool heading_flip;      // ring only: curve the other way
+	float heading_lens;     // ring only: <1 magnifies the centre, 1 is flat
+	// Outline behind the display's geometry as well as its text - the ticks,
+	// the markers, the aircraft glyph. Separate from text_outline because a
+	// compass sits over moving video while most panels sit on a filled plate,
+	// so it needs the treatment even when nothing else does. The colour is
+	// shared with text_outline_color: two outline colours on one screen looks
+	// like a mistake rather than a choice.
+	bool heading_outline;
+	float heading_outline_width;
 
 	// per-element switches, indexed by osd_element_type_t
 	bool elem_enabled[OSD_ELEM_TYPE_COUNT];

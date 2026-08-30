@@ -51,6 +51,19 @@ static const osd_anchor_t kAnchorsBtfl[] = {
 	{0x9B, 0, OSD_ELEM_FLIGHT_TIME, true, VAL_TIME},     // SYM_ON_M
 };
 
+// The compass bar is built from a small alphabet of graphic glyphs - N, S, E, W,
+// a divided line and a plain line - laid end to end. Nothing else in either
+// firmware uses these codes, so a run of them can only be the bar. Both
+// firmwares fix its width (Betaflight memcpy's 9 cells), which is why the
+// widget takes its size from the theme and uses the run only as an anchor.
+#define INAV_HEADING_FIRST 0xC8
+#define INAV_HEADING_LAST 0xCD
+#define BTFL_HEADING_FIRST 0x18
+#define BTFL_HEADING_LAST 0x1D
+
+// Shorter than the real bar so a partially redrawn one is still found.
+#define HEADING_BAR_MIN_RUN 5
+
 // Battery icon ranges, full -> empty. The icon beside a voltage is what marks it
 // as battery voltage, and its index is the FC's own coarse charge gauge.
 // Blanks tolerated between a symbol and its value, for right-aligned fields.
@@ -228,6 +241,7 @@ const char *osd_element_type_name(osd_element_type_t type) {
 	case OSD_ELEM_FLIGHT_TIME: return "flight_time";
 	case OSD_ELEM_FLIGHT_MODE: return "flight_mode";
 	case OSD_ELEM_WARNING: return "warning";
+	case OSD_ELEM_HEADING_BAR: return "heading_bar";
 	default: return "none";
 	}
 }
@@ -470,6 +484,44 @@ int osd_elements_scan(osd_glyph_getter get,
 			e->value_valid = false;
 			snprintf(e->text, sizeof(e->text), "%s", trimmed);
 			break;
+		}
+	}
+
+	// The compass bar, found as a run rather than by a leading symbol.
+	{
+		const uint16_t first = is_btfl ? BTFL_HEADING_FIRST : INAV_HEADING_FIRST;
+		const uint16_t last = is_btfl ? BTFL_HEADING_LAST : INAV_HEADING_LAST;
+		for (int row = 0; row < rows && found < max_out; row++) {
+			int c = 0;
+			while (c < cols && found < max_out) {
+				uint16_t g = get(c, row, ctx);
+				if (g < first || g > last) {
+					c++;
+					continue;
+				}
+				const int start = c;
+				while (c < cols) {
+					g = get(c, row, ctx);
+					if (g < first || g > last)
+						break;
+					c++;
+				}
+				const int len = c - start;
+				if (len < HEADING_BAR_MIN_RUN)
+					continue;
+
+				osd_element_t *e = &out[found++];
+				memset(e, 0, sizeof(*e));
+				e->type = OSD_ELEM_HEADING_BAR;
+				e->row = (uint8_t)row;
+				e->col = (uint8_t)start;
+				e->width = (uint8_t)len;
+				e->anchor_col = (uint8_t)start;
+				// No value: the heading comes from telemetry, not from decoding
+				// which way the glyphs happen to be pointing.
+				e->value_valid = false;
+				snprintf(e->text, sizeof(e->text), "%s", "HEADING");
+			}
 		}
 	}
 

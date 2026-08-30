@@ -252,6 +252,34 @@ int main(void) {
     n = osd_elements_scan(getter, NULL, COLS, ROWS, "INAV", els, 32);
     check("message row not double-claimed as mode", n == 1 && els[0].type == OSD_ELEM_WARNING);
 
+    // --- compass bar: found as a run of graphic glyphs, not by a leading symbol.
+    // Only its position matters; the heading itself comes from MSP_ATTITUDE.
+    memset(grid, 0x20, sizeof(grid));
+    { uint16_t g[] = {0xCD,0xCC,0xC8,0xCC,0xCD,0xCC,0xCA,0xCC,0xCD}; put(3, 20, g, 9); }
+    n = osd_elements_scan(getter, NULL, COLS, ROWS, "INAV", els, 32);
+    check("INAV heading bar recognised", n == 1 && els[0].type == OSD_ELEM_HEADING_BAR);
+    check("INAV heading bar spans the run", n == 1 && els[0].col == 20 && els[0].width == 9);
+    check("INAV heading bar carries no value", n == 1 && !els[0].value_valid);
+
+    memset(grid, 0x20, sizeof(grid));
+    { uint16_t g[] = {0x1D,0x1C,0x18,0x1C,0x1D,0x1C,0x1A,0x1C,0x1D}; put(5, 8, g, 9); }
+    n = osd_elements_scan(getter, NULL, COLS, ROWS, "BTFL", els, 32);
+    check("BTFL heading bar recognised", n == 1 && els[0].type == OSD_ELEM_HEADING_BAR);
+    check("BTFL heading bar spans the run", n == 1 && els[0].col == 8 && els[0].width == 9);
+
+    // The two firmwares use different ranges, and Betaflight's sits in what is
+    // ordinary text territory for INAV - the tables must not be crossed.
+    memset(grid, 0x20, sizeof(grid));
+    { uint16_t g[] = {0x1D,0x1C,0x18,0x1C,0x1D,0x1C,0x1A,0x1C,0x1D}; put(5, 8, g, 9); }
+    n = osd_elements_scan(getter, NULL, COLS, ROWS, "INAV", els, 32);
+    check("BTFL bar glyphs are not an INAV bar", n == 0);
+
+    // A stray glyph or two must not become a bar.
+    memset(grid, 0x20, sizeof(grid));
+    { uint16_t g[] = {0xCD,0xCC}; put(7, 30, g, 2); }
+    n = osd_elements_scan(getter, NULL, COLS, ROWS, "INAV", els, 32);
+    check("a two-glyph run is not a bar", n == 0);
+
     printf("\n%s (%d failure%s)\n", fails ? "FAILURES" : "ALL PASS", fails, fails == 1 ? "" : "s");
     return fails != 0;
 }

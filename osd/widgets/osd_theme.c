@@ -19,6 +19,15 @@ void osd_theme_defaults(osd_theme_t *t) {
 	t->global_scale = 1.0f;
 	t->hide_glyphs = true;
 
+	t->heading_style = 0; // band
+	t->heading_size = 480.0f;
+	t->heading_span = 90.0f;
+	t->heading_show_track = true;
+	t->heading_flip = false;
+	t->heading_lens = 0.62f;
+	t->heading_outline = true;
+	t->heading_outline_width = 2.0f;
+
 	t->accent = OSD_ARGB(0xFF, 0x00, 0xE5, 0xFF);
 	t->warn = OSD_ARGB(0xFF, 0xFF, 0xB3, 0x00);
 	t->crit = OSD_ARGB(0xFF, 0xFF, 0x3B, 0x30);
@@ -40,6 +49,10 @@ void osd_theme_defaults(osd_theme_t *t) {
 	t->value_size = 25.0f;
 	t->label_size = 11.0f;
 	t->label_tracking = 2.5f;
+
+	t->text_outline = true;
+	t->text_outline_color = OSD_ARGB(0xC0, 0x00, 0x00, 0x00);
+	t->text_outline_width = 1;
 
 	t->hatch_period = 7.0f;
 	t->hatch_duty = 0.64f;
@@ -194,6 +207,7 @@ static int strip_suffix_index(const char *key, const char *suffix) {
 static void apply_kv(osd_theme_t *t, const char *section, const char *key, const char *val) {
 	float f;
 	bool b;
+	osd_color_t rgba;
 
 	if (!strcasecmp(section, "osd")) {
 		if (!strcasecmp(key, "mode")) {
@@ -236,6 +250,12 @@ static void apply_kv(osd_theme_t *t, const char *section, const char *key, const
 			t->label_size = clampf(f, 4.0f, 200.0f);
 		else if (!strcasecmp(key, "label_tracking") && parse_float(val, &f))
 			t->label_tracking = clampf(f, -10.0f, 40.0f);
+		else if (!strcasecmp(key, "text_outline") && parse_bool(val, &b))
+			t->text_outline = b;
+		else if (!strcasecmp(key, "text_outline_color") && parse_color(val, &rgba))
+			t->text_outline_color = rgba;
+		else if (!strcasecmp(key, "text_outline_width") && parse_float(val, &f))
+			t->text_outline_width = (int)clampf(f, 1.0f, 3.0f);
 		else if (!strcasecmp(key, "hatch_period") && parse_float(val, &f))
 			t->hatch_period = clampf(f, 1.0f, 128.0f);
 		else if (!strcasecmp(key, "hatch_duty") && parse_float(val, &f))
@@ -312,6 +332,38 @@ static void apply_kv(osd_theme_t *t, const char *section, const char *key, const
 			t->ahi_moderate_max = clampf(f, 0.0f, 90.0f);
 		else if (!strcasecmp(key, "steep_thickness") && parse_float(val, &f))
 			t->ahi_steep_thickness = (int)clampf(f, 1.0f, 12.0f);
+		return;
+	}
+
+	if (!strcasecmp(section, "heading")) {
+		if (!strcasecmp(key, "style")) {
+			if (!strcasecmp(val, "band"))
+				t->heading_style = 0;
+			else if (!strcasecmp(val, "rose"))
+				t->heading_style = 1;
+			else if (!strcasecmp(val, "ring"))
+				t->heading_style = 2;
+			else if (!strcasecmp(val, "navball"))
+				t->heading_style = 3;
+			else if (!strcasecmp(val, "numeric"))
+				t->heading_style = 4;
+		} else if (!strcasecmp(key, "size") && parse_float(val, &f))
+			t->heading_size = clampf(f, 60.0f, 1920.0f);
+		else if (!strcasecmp(key, "span") && parse_float(val, &f))
+			// Band only. Under 45 degrees the tape scrolls too fast to read a
+			// turn; over 120 the marks are too close together to tell apart.
+			t->heading_span = clampf(f, 45.0f, 120.0f);
+		else if (!strcasecmp(key, "outline") && parse_bool(val, &b))
+			t->heading_outline = b;
+		else if (!strcasecmp(key, "outline_width") && parse_float(val, &f))
+			t->heading_outline_width = clampf(f, 1.0f, 5.0f);
+		else if (!strcasecmp(key, "show_track") && parse_bool(val, &b))
+			t->heading_show_track = b;
+		else if (!strcasecmp(key, "flip") && parse_bool(val, &b))
+			t->heading_flip = b;
+		else if (!strcasecmp(key, "lens") && parse_float(val, &f))
+			// Below ~0.3 the centre is stretched past the point of reading.
+			t->heading_lens = clampf(f, 0.3f, 1.0f);
 		return;
 	}
 
