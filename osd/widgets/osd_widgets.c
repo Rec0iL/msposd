@@ -1292,7 +1292,7 @@ int osd_widgets_draw_all(osd_surface_t *s, const osd_theme_t *th, osd_font_t *fo
 			lp.label_size = th->label_size;
 			lp.label_tracking = th->label_tracking;
 
-			osd_link_measure(&lp, &st->link, &link_w, &link_h);
+			osd_link_measure(&lp, &st->link, font, &link_w, &link_h);
 			// The theme places the top-left corner as a fraction of the screen,
 			// so a layout carries over between a 720p and a 1080p ground
 			// station. Clamped, because 100% would put it entirely off-screen.

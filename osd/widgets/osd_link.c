@@ -54,9 +54,9 @@ static void plate(osd_surface_t *s, float x, float y, float w, float h, float ta
 #define LINK_ROW_H 30.0f
 #define LINK_FOOT_H 34.0f
 #define LINK_VERT_W 250.0f
-// Wide enough that the channel, the loss and the throughput fit on one line
-// with room to spare, which is the whole point of the style.
-#define LINK_ULTRA_W 620.0f
+// The floor for the ultrawide style, which otherwise sizes itself to its header
+// line. Below this the quality bar is too short to read as a bar.
+#define LINK_ULTRA_MIN_W 340.0f
 
 // Horizontal: one column per antenna, four bands down each.
 #define LINK_COL_W 96.0f
@@ -117,8 +117,46 @@ static osd_color_t quality_colour(const osd_link_params_t *p, float pct) {
 	return p->crit;
 }
 
-void osd_link_measure(
-	const osd_link_params_t *p, const osd_link_stats_t *s, float *out_w, float *out_h) {
+// The header's pieces: what the radio is tuned to, and - in the ultrawide style,
+// which is the point of it - the loss and the throughput alongside.
+static void header_pieces(const osd_link_stats_t *st, osd_link_style_t style, char *tune,
+	size_t tune_n, char *tail, size_t tail_n) {
+	tune[0] = '\0';
+	tail[0] = '\0';
+
+	if (style == OSD_LINK_ULTRAWIDE) {
+		size_t used = 0;
+		if (st->loss_pct >= 0.0f)
+			used += (size_t)snprintf(tail + used, tail_n - used, "%.1f%% lost", st->loss_pct);
+		if (st->bitrate_mbps >= 0.0f)
+			snprintf(tail + used, tail_n - used, "%s%.1f Mbps", used ? "   " : "",
+				st->bitrate_mbps);
+	}
+
+	if (st->channel > 0 && st->freq_mhz > 0 && st->bandwidth_mhz > 0)
+		snprintf(tune, tune_n, "CH%d  %d  %dMHz", st->channel, st->freq_mhz, st->bandwidth_mhz);
+	else if (st->channel > 0 && st->freq_mhz > 0)
+		snprintf(tune, tune_n, "CH%d  %d", st->channel, st->freq_mhz);
+	else if (st->channel > 0)
+		snprintf(tune, tune_n, "CH%d", st->channel);
+	else if (st->freq_mhz > 0)
+		snprintf(tune, tune_n, "%dMHz", st->freq_mhz);
+}
+
+// Everything the header would carry if it had room. What the ultrawide style
+// sizes itself to.
+static void header_full_text(
+	const osd_link_stats_t *st, osd_link_style_t style, char *out, size_t n) {
+	char tune[40], tail[48];
+	header_pieces(st, style, tune, sizeof(tune), tail, sizeof(tail));
+	if (tune[0] && tail[0])
+		snprintf(out, n, "%s   %s", tune, tail);
+	else
+		snprintf(out, n, "%s%s", tune, tail);
+}
+
+void osd_link_measure(const osd_link_params_t *p, const osd_link_stats_t *s, osd_font_t *font,
+	float *out_w, float *out_h) {
 	if (!p || !out_w || !out_h)
 		return;
 	const float k = p->scale > 0.0f ? p->scale : 1.0f;
@@ -129,7 +167,35 @@ void osd_link_measure(
 	if (p->style == OSD_LINK_ULTRAWIDE) {
 		const float snr = (n > 0 && has_snr(s)) ? LINK_H_SNR : 0.0f;
 		const float body = n > 0 ? (LINK_H_CAP + LINK_H_VAL + LINK_H_BAR + snr) : 0.0f;
-		*out_w = LINK_ULTRA_W * k;
+		const float px = p->pad_x * k;
+
+		// Sized to its header line rather than to a constant. A width picked for
+		// the worst case - channel, bandwidth, loss and throughput all present -
+		// leaves most of the strip empty in every other case, and empty strip is
+		// covered video.
+		//
+		// The header text sits on the raised part of the plate, which starts a
+		// third of the way across, so the width has to be scaled up by that
+		// fraction rather than just padded.
+		float need = LINK_ULTRA_MIN_W * k;
+		if (font) {
+			char full[96];
+			header_full_text(s, p->style, full, sizeof(full));
+			if (full[0]) {
+				osd_text_metrics_t m = {0};
+				osd_text_measure(font, p->label_size * 1.15f * k, full, &m);
+				const float w_for_header = ((float)m.width + px * 2.0f) / (1.0f - 0.34f);
+				if (w_for_header > need)
+					need = w_for_header;
+			}
+		}
+		// The aerials, if shown, may want more than the header does.
+		if (n > 0) {
+			const float w_for_cols = ((float)n * LINK_COL_W + 24.0f) * k;
+			if (w_for_cols > need)
+				need = w_for_cols;
+		}
+		*out_w = need;
 		*out_h = (LINK_HEAD_H + lq + body + LINK_BOTTOM_PAD) * k;
 	} else if (p->style == OSD_LINK_HORIZONTAL) {
 		// One column per antenna, with the header stacked above them so a wide
@@ -171,22 +237,9 @@ static void tuning_text(const osd_link_stats_t *st, osd_link_style_t style, osd_
 	float size, float avail, char *out, size_t n) {
 	out[0] = '\0';
 
-	// In the ultrawide style the loss and the throughput share this line, which
-	// is what makes the style worth having: one strip carrying everything but
-	// the aerials.
-	char tail[48];
-	tail[0] = '\0';
-	if (style == OSD_LINK_ULTRAWIDE) {
-		size_t used = 0;
-		if (st->loss_pct >= 0.0f)
-			used += (size_t)snprintf(tail + used, sizeof(tail) - used, "%.1f%% lost", st->loss_pct);
-		if (st->bitrate_mbps >= 0.0f)
-			snprintf(tail + used, sizeof(tail) - used, "%s%.1f Mbps", used ? "   " : "",
-				st->bitrate_mbps);
-	}
+	char tune[40], tail[48];
+	header_pieces(st, style, tune, sizeof(tune), tail, sizeof(tail));
 
-	char tune[40];
-	tune[0] = '\0';
 	char candidates[6][96];
 	int count = 0;
 	if (st->channel > 0 && st->freq_mhz > 0 && st->bandwidth_mhz > 0)
@@ -237,7 +290,7 @@ void osd_link_draw(osd_surface_t *s, osd_font_t *font, float x, float y,
 	const int n = p->show_antennas ? antenna_count(st) : 0;
 
 	float w, h;
-	osd_link_measure(p, st, &w, &h);
+	osd_link_measure(p, st, font, &w, &h);
 
 	bool prev_on;
 	osd_color_t prev_col;

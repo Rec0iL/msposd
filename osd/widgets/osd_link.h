@@ -109,10 +109,15 @@ typedef struct {
 	float value_size, label_size, label_tracking;
 } osd_link_params_t;
 
-/// The rectangle the widget will occupy. Shared with the placement pass, so
-/// what is reserved is exactly what gets painted.
-void osd_link_measure(
-	const osd_link_params_t *p, const osd_link_stats_t *s, float *out_w, float *out_h);
+/// The rectangle the widget will occupy. Shared with the placement pass, so what
+/// is reserved is exactly what gets painted.
+///
+/// The font is needed because the ultrawide style sizes itself to its header
+/// line - the channel, the loss and the throughput all live there - and a fixed
+/// width wide enough for the worst case leaves most of the strip empty in every
+/// other one.
+void osd_link_measure(const osd_link_params_t *p, const osd_link_stats_t *s, osd_font_t *font,
+	float *out_w, float *out_h);
 
 /// Draws with its top-left corner at (x, y).
 void osd_link_draw(osd_surface_t *s, osd_font_t *font, float x, float y,

@@ -37,7 +37,9 @@ int main(int argc, char **argv) {
 		// The driver counts no packets, so quality and loss stay absent - but the
 		// throughput belongs to the stream rather than the radio, so it is
 		// reported here too.
-		st.quality_pct = -1.0f; st.loss_pct = -1.0f; st.bitrate_mbps = 11.4f;
+		// Nothing linked yet: the driver counts no packets, so the one thing it
+		// can say honestly is that the link is down.
+		st.quality_pct = 0.0f; st.loss_pct = -1.0f; st.bitrate_mbps = 11.4f;
 		// The channel comes from the Realtek driver's rf_info. These are the
 		// numbers off a real APFPV station: channel 140 at 40MHz.
 		st.channel = 140; st.freq_mhz = 5700; st.bandwidth_mhz = 40;
@@ -69,7 +71,7 @@ int main(int argc, char **argv) {
 		p.pad_x = 13; p.pad_y = 11; p.chamfer = 14; p.bar_height = 16;
 		p.value_size = 25; p.label_size = 11; p.label_tracking = 2.5f;
 
-		float ww, hh; osd_link_measure(&p, &st, &ww, &hh);
+		float ww, hh; osd_link_measure(&p, &st, font, &ww, &hh);
 		osd_link_draw(&s, font, 60.0f, 60.0f, &p, &st, false);
 		char lbl[64];
 		snprintf(lbl, sizeof(lbl), "%s  %s  %s  (%.0fx%.0f)", names[i % 3], st.source,

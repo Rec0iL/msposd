@@ -574,10 +574,10 @@ int main(void) {
 		full.antennas = OSD_LINK_MAX_ANTENNAS;
 		float lw, lh;
 		lp.style = OSD_LINK_VERTICAL;
-		osd_link_measure(&lp, &full, &lw, &lh);
+		osd_link_measure(&lp, &full, font, &lw, &lh);
 		check("link: vertical fits at six antennas", lw < 1920.0f && lh < 1080.0f);
 		lp.style = OSD_LINK_HORIZONTAL;
-		osd_link_measure(&lp, &full, &lw, &lh);
+		osd_link_measure(&lp, &full, font, &lw, &lh);
 		check("link: horizontal fits at six antennas", lw < 1920.0f && lh < 1080.0f);
 
 		// Turning the aerials off has to actually shrink the panel, in both
@@ -585,17 +585,17 @@ int main(void) {
 		// number of columns, and with no columns there is nothing to size to.
 		float on_w, on_h, off_w, off_h;
 		lp.show_antennas = true;
-		osd_link_measure(&lp, &full, &on_w, &on_h);
+		osd_link_measure(&lp, &full, font, &on_w, &on_h);
 		lp.show_antennas = false;
-		osd_link_measure(&lp, &full, &off_w, &off_h);
+		osd_link_measure(&lp, &full, font, &off_w, &off_h);
 		check("link: aerials off is shorter", off_h < on_h);
 		check("link: aerials off is narrower", off_w < on_w);
 
 		lp.style = OSD_LINK_VERTICAL;
 		lp.show_antennas = true;
-		osd_link_measure(&lp, &full, &on_w, &on_h);
+		osd_link_measure(&lp, &full, font, &on_w, &on_h);
 		lp.show_antennas = false;
-		osd_link_measure(&lp, &full, &off_w, &off_h);
+		osd_link_measure(&lp, &full, font, &off_w, &off_h);
 		check("link: vertical loses its aerial rows", off_h < on_h);
 		// Six rows gone, so it should be a lot shorter rather than a little.
 		check("link: vertical drops six rows' worth", on_h - off_h > 100.0f);
@@ -607,11 +607,14 @@ int main(void) {
 			up.show_antennas = true;
 			up.style = OSD_LINK_HORIZONTAL;
 			float hw, hh2;
-			osd_link_measure(&up, &full, &hw, &hh2);
+			osd_link_measure(&up, &full, font, &hw, &hh2);
 			up.style = OSD_LINK_ULTRAWIDE;
 			float uw, uh;
-			osd_link_measure(&up, &full, &uw, &uh);
-			check("link: ultrawide is wider than horizontal", uw > hw);
+			osd_link_measure(&up, &full, font, &uw, &uh);
+			// Not wider than horizontal: with the aerials shown both are driven
+			// by the same columns, and the point of this style is that it takes
+			// no more room than its contents need.
+			check("link: ultrawide is no wider than horizontal", uw <= hw + 1.0f);
 			check("link: ultrawide is shallower", uh < hh2);
 
 			// Losing the footer must not depend on there being nothing to put
@@ -620,10 +623,40 @@ int main(void) {
 			rich.loss_pct = 0.4f;
 			rich.bitrate_mbps = 12.4f;
 			up.style = OSD_LINK_HORIZONTAL;
-			osd_link_measure(&up, &rich, &hw, &hh2);
+			osd_link_measure(&up, &rich, font, &hw, &hh2);
 			up.style = OSD_LINK_ULTRAWIDE;
-			osd_link_measure(&up, &rich, &uw, &uh);
+			osd_link_measure(&up, &rich, font, &uw, &uh);
 			check("link: ultrawide sheds the footer row", uh < hh2);
+
+			// And with no aerials it sizes to its header line, so a station
+			// reporting little takes a shorter strip than one reporting a lot.
+			up.show_antennas = false;
+			osd_link_stats_t bare = rich;
+			bare.freq_mhz = 0;
+			bare.bandwidth_mhz = 0;
+			bare.loss_pct = -1.0f;
+			bare.bitrate_mbps = -1.0f;
+			float rich_w, bare_w, ignored;
+			osd_link_measure(&up, &rich, font, &rich_w, &ignored);
+			osd_link_measure(&up, &bare, font, &bare_w, &ignored);
+			check("link: a fuller header makes a wider strip", rich_w > bare_w);
+			// The floor still applies, or the quality bar stops reading as one.
+			check("link: but never narrower than the floor", bare_w > 300.0f);
+		}
+
+		// Zero is a reading, not an absence: a ground station saying the link is
+		// down has to get the row, drawn empty and red, rather than no row.
+		{
+			osd_link_params_t zp = lp;
+			zp.show_antennas = false;
+			osd_link_stats_t down = full;
+			down.quality_pct = 0.0f;
+			osd_link_stats_t none = full;
+			none.quality_pct = -1.0f;
+			float zw, zh, nw, nh;
+			osd_link_measure(&zp, &down, font, &zw, &zh);
+			osd_link_measure(&zp, &none, font, &nw, &nh);
+			check("link: a zero quality still gets its row", zh > nh);
 		}
 
 		// The quality row exists only when quality is reported: a ground station
@@ -632,7 +665,7 @@ int main(void) {
 		osd_link_stats_t noq = full;
 		noq.quality_pct = -1.0f;
 		float noq_w, noq_h;
-		osd_link_measure(&lp, &noq, &noq_w, &noq_h);
+		osd_link_measure(&lp, &noq, font, &noq_w, &noq_h);
 		check("link: no quality, no quality row", noq_h < off_h);
 	}
 
@@ -685,7 +718,7 @@ int main(void) {
 		lp.style = OSD_LINK_VERTICAL;
 		lp.scale = 1.0f;
 		float lw, lh;
-		osd_link_measure(&lp, &st.link, &lw, &lh);
+		osd_link_measure(&lp, &st.link, font, &lw, &lh);
 		const float lx = (float)SURF_W - lw;
 		const bool clear_of_it =
 			pxx + pww <= lx || lx + lw <= pxx || pyy + phh <= 0.0f || lh <= pyy;
