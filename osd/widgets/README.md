@@ -238,6 +238,34 @@ Keep the two in step: the keys, ranges and defaults are duplicated in
 drift there degrades the look rather than breaking anything, but it is still
 drift.
 
+### Picking one
+
+msposd is handed one file and never looks for others. The two front ends do the
+looking, and they have to agree, or the same ground station would offer a
+different set of themes depending on which one the pilot opened. The rule, in
+`gsmenu.sh` and in `osd_theme_model.cpp`:
+
+1. `$OSD_THEMES`
+2. `<folder of the active theme>/themes`
+3. `/etc/msposd/themes`
+4. `/usr/share/msposd/themes`
+
+First one that actually holds a theme — a folder counts only once something in
+it has a `theme.ini`, so an empty `/etc/msposd/themes` left behind by a package
+does not hide the folder that has them.
+
+Picking a theme **replaces** the active file with a copy of that theme, and
+keeps the previous file beside it as `.bak`. It is a reset, not a layer: the
+alternative — leaving the old file's settings on top of the new theme — means
+picking Minimal Teal on a customised station changes almost nothing, which is
+worse than losing settings that are still in the backup.
+
+The copy rewrites a relative `inherit` to an absolute path. `../minimal-orchid`
+resolves against the file naming it, and after the copy that file is somewhere
+else entirely, so without the rewrite a picked variant would quietly lose
+everything it inherits and show as a palette over defaults. Both front ends do
+this, and both have a test that fails without it.
+
 ## Speed-driven map view
 
 `osd_map_view_update` picks the zoom from ground speed and pushes the view

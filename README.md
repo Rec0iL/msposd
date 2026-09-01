@@ -25,6 +25,10 @@
 > tab) and **PixelPilot_rk** (the same settings in the on-screen `gsmenu`). All
 > three write and read the one theme file.
 >
+> **[INSTRUCTIONS.md](INSTRUCTIONS.md) — how to get it running** on either
+> ground station: what to build, what to start in which order, and what is not
+> working yet.
+>
 > **Status: heavily work in progress.** Two of us are flying and testing it. It
 > breaks, the theme format still changes, and nothing here is stable.
 >
