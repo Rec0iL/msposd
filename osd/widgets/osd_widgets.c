@@ -1314,13 +1314,18 @@ int osd_widgets_draw_all(osd_surface_t *s, const osd_theme_t *th, osd_font_t *fo
 	float link_x = 0.0f, link_y = 0.0f, link_w = 0.0f, link_h = 0.0f;
 	osd_link_params_t lp = {0};
 	bool link_stale = false;
-	if (th->link_enabled && th->link_source[0] && th->link_opacity > 0.01f) {
+	// An empty `source` means the default place, not "off". Every writer
+	// resolves that same rule - $MSPOSD_LINK_STATS, else /tmp/msposd-link.ini -
+	// so a ground station and msposd find each other with nothing configured at
+	// either end, which is what the shipped themes say happens.
+	const char *link_source = th->link_source[0] ? th->link_source : osd_link_default_path();
+	if (th->link_enabled && th->link_opacity > 0.01f) {
 		// The poll clock advances whether or not the read succeeded. Advancing it
 		// only on success meant a missing file was reopened every single frame,
 		// which is the one case where it definitely will not appear.
 		if (st->link_polled_ms == 0 || now_ms - st->link_polled_ms >= 200) {
 			st->link_polled_ms = now_ms;
-			osd_link_stats_load(th->link_source, &st->link, now_ms);
+			osd_link_stats_load(link_source, &st->link, now_ms);
 		}
 		if (st->link.valid) {
 			link_stale = osd_link_stats_stale(&st->link, now_ms, th->link_hold_ms);

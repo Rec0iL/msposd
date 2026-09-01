@@ -7,6 +7,7 @@
 #include "osd_widgets.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define COLS 53
@@ -564,6 +565,47 @@ int main(void) {
 		// Stale once the writer stops.
 		check("link: fresh stats are not stale", !osd_link_stats_stale(&before, 1200, 3000.0f));
 		check("link: old stats go stale", osd_link_stats_stale(&before, 9000, 3000.0f));
+
+		// An empty `source` in the theme means the default place, not "off".
+		// Both shipped themes leave it empty and say so in a comment, and every
+		// writer resolves the same rule - so if this stops holding, the widget
+		// silently never appears on a station that configured nothing, which is
+		// most of them.
+		{
+			char def_path[] = "/tmp/_msposd_link_default.ini";
+			setenv("MSPOSD_LINK_STATS", def_path, 1);
+			FILE *df = fopen(def_path, "w");
+			fprintf(df, "source = APFPV\nquality = 42\nchannel = 140\n");
+			fclose(df);
+
+			osd_theme_t lth;
+			osd_theme_defaults(&lth);
+			check("link: the shipped default source is empty", lth.link_source[0] == '\0');
+
+			osd_widget_state_t lst;
+			osd_widgets_state_init(&lst);
+			memset(buf, 0, (size_t)SURF_W * SURF_H * 4);
+			osd_surface_t ls_surf;
+			osd_surface_init(&ls_surf, buf, SURF_W, SURF_H, SURF_W * 4);
+			osd_grid_t lg = {CELL_W, CELL_H, 8, 0, NULL, NULL};
+			// An empty list, not a null one: the link widget is the only one that
+			// draws with nothing recognised on the grid, but draw_all still wants
+			// somewhere to look.
+			osd_element_t no_els[1] = {0};
+			osd_widgets_draw_all(&ls_surf, &lth, font, &lst, no_els, 0, &lg, 1000);
+			check("link: an empty source falls back to the default path", lst.link.valid);
+			check("link: and it is that file's numbers",
+				strcmp(lst.link.source, "APFPV") == 0 && lst.link.channel == 140);
+
+			// Nothing there is still nothing to draw - the fallback must not
+			// invent a widget out of a missing file.
+			remove(def_path);
+			osd_widget_state_t empty_st;
+			osd_widgets_state_init(&empty_st);
+			osd_widgets_draw_all(&ls_surf, &lth, font, &empty_st, no_els, 0, &lg, 1000);
+			check("link: no file at the default path draws nothing", !empty_st.link.valid);
+			unsetenv("MSPOSD_LINK_STATS");
+		}
 
 		// Both styles have to measure to something that fits on a 1080p screen
 		// with every antenna slot filled.
