@@ -11,6 +11,38 @@ on:
   workflow_dispatch:
 
 jobs:
+  # The ground station binary, which is aarch64 and therefore not something the
+  # x86 job above can produce. Built in a Debian bookworm container on an arm64
+  # runner: no emulation, and - the part that matters - against bookworm's
+  # glibc, which is what the ground stations run. Built against a newer one it
+  # would fail to start with a GLIBC_2.xx error on a device in a field.
+  build_rockchip:
+    name: Build for a Rockchip ground station
+    runs-on: ubuntu-24.04-arm
+    container: debian:bookworm
+    steps:
+      - name: Install deps
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq --no-install-recommends \
+            git ca-certificates gcc make pkg-config libevent-dev libcairo2-dev \
+            libcurl4-openssl-dev libjpeg-dev libx11-dev libxext-dev
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          make -B DRV=$PWD OUTPUT=msposd_rockchip rockchip
+          ls -l msposd_rockchip
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: msposd_rockchip
+          path: msposd_rockchip
+
   build:
     runs-on: ubuntu-latest
     steps:
@@ -29,7 +61,6 @@ jobs:
           ./build.sh star6b0
           ./build.sh star6e
           ./build.sh native
-          ./build.sh rockchip
 
       - name: Upload binary
         uses: actions/upload-artifact@v4
@@ -40,7 +71,6 @@ jobs:
               msposd_star6b0
               msposd_star6e
               msposd
-              msposd_rockchip
 
       - name: Versioned release
         if: startsWith(github.ref, 'refs/tags/')
