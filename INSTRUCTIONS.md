@@ -52,7 +52,40 @@ shared-memory region called `msposd`, and PixelPilot composites that over the
 video as one more OSD widget. That is why the order matters: **PixelPilot
 first** — it creates the region — then msposd, which waits for it to appear.
 
-### 1. Build PixelPilot on the ground station
+### 1. Install PixelPilot
+
+Both forks publish aarch64 builds, so this does not have to be built at all:
+
+- **PixelPilot** — `pixelpilot-rk_*_arm64.deb` from the releases of
+  `Rec0iL/PixelPilot_rk`. It brings `/usr/bin/pixelpilot`, the systemd unit,
+  `/etc/pixelpilot/config_osd.json`, `/etc/default/pixelpilot` and
+  `/usr/share/pixelpilot/gsmenu-osd.sh`.
+
+  It deliberately does **not** install `/usr/bin/gsmenu.sh`. If your ground
+  station already has one it is the image's own, with the integrator's real
+  logic in it, and overwriting it would turn every working page into a stub —
+  see step 6.
+
+```sh
+sudo apt install ./pixelpilot-rk_1.3.0-1_arm64.deb
+```
+
+- **msposd** — `msposd-groundstation-arm64.tar.gz` from the releases of
+  `Rec0iL/msposd`, which covers step 3 and step 4 below in one go:
+
+```sh
+tar -xzf msposd-groundstation-arm64.tar.gz
+cd msposd-groundstation && sudo ./install.sh
+```
+
+Both are built against Debian **bookworm**. On an older image, build instead -
+a binary built against a newer glibc than the ground station has does not
+start, and says so in a way that is no fun to read on a device in a field.
+
+Skip to step 2 if you installed the packages; the rest of this section is for
+building it yourself.
+
+### 1b. Build PixelPilot on the ground station
 
 The Rockchip build needs the vendor stack: `rockchip_mpp`, `rga`, GStreamer
 (`gstreamer-1.0`, `gstreamer-app-1.0`, `gstreamer-net-1.0`), `libdrm`,
@@ -125,6 +158,19 @@ cp themes/tactical/theme.ini /etc/msposd/theme.ini
 `/etc/msposd/theme.ini` is the file both sides use, and `/etc/msposd/themes` is
 where the theme picker looks. Both are the defaults, so nothing needs setting.
 
+The fonts go somewhere else, and this one is easy to miss: on an SBC msposd
+loads them from `/usr/share/fonts/`, not from beside the binary the way the
+desktop build does.
+
+```sh
+cp font*.png /usr/share/fonts/
+```
+
+All of them. Which file it opens depends on the flight controller it finds -
+`font_btfl*.png`, `font_inav*.png`, `font_ardu*.png`, or plain `font*.png`
+before one is identified. A missing one is not silent: msposd prints
+`Can't find font file: ... OSD Disabled!` and draws nothing at all.
+
 ### 5. Start the two, in order
 
 By hand, to try it:
@@ -144,8 +190,7 @@ OSD_THEMES=/etc/msposd/themes
 
 They have to be in **PixelPilot's** environment, not msposd's, because gsmenu.sh
 inherits them from the process that runs it. `gsmenu.sh` also has to be on
-`PATH` — PixelPilot calls it by bare name — so `/usr/local/bin/gsmenu.sh` or
-similar.
+`PATH` — PixelPilot calls it by bare name — which the next step is about.
 
 msposd then wants its own unit, ordered after PixelPilot so the shared memory
 exists (it waits for it anyway, and says so once a second):
@@ -160,7 +205,38 @@ ExecStart=/usr/bin/msposd --master 127.0.0.1:14551 --osd -r 50 --theme /etc/mspo
 Restart=always
 ```
 
-### 6. Use it
+### 6. Give gsmenu the OSD pages
+
+`gsmenu.sh` is the shell script PixelPilot runs for every settings row — it
+must be on `PATH`, because PixelPilot calls it by bare name. Which one you have
+decides what to do here, and getting this wrong is the one way to break a
+working ground station:
+
+**If the station already has `/usr/bin/gsmenu.sh`** — every image does — that
+file is the integrator's, with the real logic in it: SSH to the air unit, the
+channel, TX power, the camera. Leave it alone and add one line near the top,
+before its own `case`:
+
+```sh
+. /usr/share/pixelpilot/gsmenu-osd.sh 2>/dev/null && osd_dispatch "$@" && exit 0
+```
+
+`osd_dispatch` answers `get|set gs osd …` and returns non-zero for everything
+else, so every other command falls through to the script's own dispatch
+untouched. Nothing else in the file changes.
+
+**If there is no gsmenu.sh at all** — a bare Debian install rather than a
+ground-station image — copy the template, which already has the line:
+
+```sh
+cp /usr/share/pixelpilot/gsmenu.sh.template /usr/bin/gsmenu.sh
+```
+
+Be aware of what that template is: upstream's boilerplate, where everything
+outside the OSD pages is a dummy getter. It gives you a working OSD menu and
+placeholder values for the rest.
+
+### 7. Use it
 
 **GS Settings → OSD.** The first row is **Theme** — the list of folders in the
 themes directory. Picking one replaces `/etc/msposd/theme.ini` with a copy of
@@ -246,14 +322,17 @@ themes and the link widget are all usable meanwhile.
 | No link panel | The ground station is not writing stats, or `[link] enabled` is off. An empty `[link] source` is fine — it means the default place |
 | Compass drawn twice | The flight controller's own heading bar is still on. Turn its element off on the FC, or the widget off in the theme |
 | A "NO MSP DATA" box over the video | PixelPilot's own `MspDisplayPortWidget` is still configured on a port msposd has bound. See step 2 of Path A |
+| The OSD page is empty, other pages work | `gsmenu.sh` has no hook into `gsmenu-osd.sh`. Step 6 of Path A |
+| Every page except OSD reads placeholder values | Something overwrote `/usr/bin/gsmenu.sh` with the template. Restore the image's own and add the hook instead |
 | Glyph OSD drawn twice | Both renderers have the stream. Only one of them should |
 
 Run msposd with `-v` while setting up. It says what it recognised.
 
 ## What we have not verified
 
-- **The PixelPilot arm64 build.** The changes for it — the tuned channel out of
-  `rf_info`, the link-stats writer, the gsmenu OSD pages — were compiled and
-  tested in isolation on a desktop and exercised in the LVGL simulator, but the
-  full Rockchip binary has never been built here. It needs the vendor headers.
+- **PixelPilot on real hardware.** The arm64 binary and the .deb now build -
+  in a Debian bookworm container, against the Rockchip vendor libraries - so
+  the changes for it (the tuned channel out of `rf_info`, the link-stats
+  writer, the gsmenu OSD pages) do compile for the target. None of it has ever
+  *run* on a Rockchip device. Compiling is not working.
 - **The two paths side by side.** Each has been used on its own.
