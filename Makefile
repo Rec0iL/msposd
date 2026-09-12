@@ -66,7 +66,11 @@ native: version.h
 
 rockchip: version.h
 	$(eval SDK = ./sdk/gk7205v300)
-	$(eval CFLAGS += -D__ROCKCHIP__)
-	$(eval LIB = `pkg-config --libs cairo x11 xext` -lXext -lm -lrt)
+	# The map widget fetches and decodes its tiles, same as the native build.
+	# Without these the ground station gets a map that can only draw PNG tiles
+	# somebody put in the cache directory by hand, and no satellite layer at all
+	# - which looks like a broken map rather than a disabled one.
+	$(eval CFLAGS += -D__ROCKCHIP__ -DOSD_MAP_HTTP -DOSD_MAP_JPEG)
+	$(eval LIB = `pkg-config --libs cairo x11 xext` -lXext -lm -lrt -lcurl -ljpeg -lpthread)
 	$(eval BUILD = $(CC) $(SRCS) -I $(SDK)/include -L $(DRV) $(CFLAGS) $(LIB) -levent_core -O0 -g -o $(OUTPUT))
 	$(BUILD)
